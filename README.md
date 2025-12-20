@@ -261,7 +261,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 If you use this code in your research, please cite:
 
 ```bibtex
-@software{suite06_shors,
+@software{shors-noise-gated,
   author = {Justin Howard-Stanley},
   title = {Suite 0.6: Production Shor's Algorithm Implementation},
   year = {2025},
