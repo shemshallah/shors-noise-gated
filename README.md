@@ -282,7 +282,7 @@ Open an issue on GitHub or contact: shemshallah@gmail.com
 
 *"The best way to predict the future is to implement it."*
 
-[![GitHub stars](https://img.shields.io/github/stars/[your-username]/suite-06-shors?style=social)](https://github.com/[your-username]/suite-06-shors)
-[![Twitter Follow](https://img.shields.io/twitter/follow/[your-handle]?style=social)](https://twitter.com/[your-handle])
+[![GitHub stars](https://img.shields.io/github/stars/shemshallah/shors-noise-gated?style=social)](https://github.com/shemshallah/shors-noise-gated)
+[![Twitter Follow](https://img.shields.io/twitter/follow/shemshallah?style=social)](https://twitter.com/shemshallah)
 
 </div>
