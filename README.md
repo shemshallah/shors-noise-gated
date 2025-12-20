@@ -239,10 +239,9 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## 👤 Author
 
-**[Your Name]**
-- Email: [your.email@institution.edu]
-- LinkedIn: [Your LinkedIn]
-- Research Group: [Your Lab/Institution]
+**Justin Howard-Stanley & Claude**
+- Email: shemshallah@gmail.com
+- Research Group: Independent Researcher
 
 ---
 
@@ -251,7 +250,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 - **IonQ** for quantum simulator access via QBraid
 - **Qiskit** development team for circuit tools
 - **QBraid** for unified quantum computing platform
-- Reviewers and collaborators: [Names if applicable]
+
 
 ---
 
@@ -263,17 +262,17 @@ If you use this code in your research, please cite:
 
 ```bibtex
 @software{suite06_shors,
-  author = {[Your Name]},
+  author = {Justin Howard-Stanley},
   title = {Suite 0.6: Production Shor's Algorithm Implementation},
   year = {2025},
-  url = {https://github.com/[your-username]/suite-06-shors},
+  url = {https://github.com/shemshallah]/shors-noise-gated},
   note = {Quantum integer factorization via period finding}
 }
 ```
 
 ### Questions?
 
-Open an issue on GitHub or contact: [your.email@institution.edu]
+Open an issue on GitHub or contact: shemshallah@gmail.com 
 
 ---
 
