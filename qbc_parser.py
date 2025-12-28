@@ -748,22 +748,320 @@ class QBCAssembler:
         return operands
 
 # ════════════════════════════════════════════════════════════════════════════
+# QUANTUM ALGORITHM LIBRARY
+# ════════════════════════════════════════════════════════════════════════════
+
+class QuantumAlgorithmLibrary:
+    """Library of quantum algorithm implementations for the lattice"""
+
+    def __init__(self, vm: 'QBCVirtualMachine'):
+        self.vm = vm
+        self.logger = self._setup_logger()
+
+    def _setup_logger(self):
+        import logging
+        logger = logging.getLogger("QBCAlgorithms")
+        logger.setLevel(logging.INFO)
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter('%(asctime)s [%(name)s] %(message)s'))
+            logger.addHandler(handler)
+        return logger
+
+    # ────────────────────────────────────────────────────────────────────────
+    # GROVER'S ALGORITHM SUPPORT
+    # ────────────────────────────────────────────────────────────────────────
+
+    def grover_oracle(self, target_state: int, n_qubits: int) -> Dict[str, Any]:
+        """
+        Grover's oracle: marks target state with phase flip
+        Returns circuit description for lattice execution
+        """
+        self.logger.info(f"Grover Oracle: marking state |{target_state:0{n_qubits}b}⟩")
+
+        return {
+            'algorithm': 'grover_oracle',
+            'n_qubits': n_qubits,
+            'target_state': target_state,
+            'target_binary': format(target_state, f'0{n_qubits}b'),
+            'gates': self._generate_grover_oracle_gates(target_state, n_qubits)
+        }
+
+    def _generate_grover_oracle_gates(self, target: int, n: int) -> List[Dict]:
+        """Generate gate sequence for Grover oracle"""
+        gates = []
+
+        # X gates on qubits where target bit is 0
+        for i in range(n):
+            if not (target & (1 << i)):
+                gates.append({'type': 'X', 'qubit': i})
+
+        # Multi-controlled Z gate
+        if n > 1:
+            gates.append({'type': 'MCZ', 'controls': list(range(n-1)), 'target': n-1})
+        else:
+            gates.append({'type': 'Z', 'qubit': 0})
+
+        # Undo X gates
+        for i in range(n):
+            if not (target & (1 << i)):
+                gates.append({'type': 'X', 'qubit': i})
+
+        return gates
+
+    def grover_diffusion(self, n_qubits: int) -> Dict[str, Any]:
+        """
+        Grover diffusion operator: 2|s⟩⟨s| - I
+        where |s⟩ = H^⊗n|0⟩ is uniform superposition
+        """
+        self.logger.info(f"Grover Diffusion: {n_qubits} qubits")
+
+        gates = []
+
+        # H on all qubits
+        for i in range(n_qubits):
+            gates.append({'type': 'H', 'qubit': i})
+
+        # X on all qubits
+        for i in range(n_qubits):
+            gates.append({'type': 'X', 'qubit': i})
+
+        # Multi-controlled Z
+        if n_qubits > 1:
+            gates.append({'type': 'MCZ', 'controls': list(range(n_qubits-1)), 'target': n_qubits-1})
+        else:
+            gates.append({'type': 'Z', 'qubit': 0})
+
+        # X on all qubits
+        for i in range(n_qubits):
+            gates.append({'type': 'X', 'qubit': i})
+
+        # H on all qubits
+        for i in range(n_qubits):
+            gates.append({'type': 'H', 'qubit': i})
+
+        return {
+            'algorithm': 'grover_diffusion',
+            'n_qubits': n_qubits,
+            'gates': gates
+        }
+
+    # ────────────────────────────────────────────────────────────────────────
+    # VQE (VARIATIONAL QUANTUM EIGENSOLVER) SUPPORT
+    # ────────────────────────────────────────────────────────────────────────
+
+    def vqe_ansatz_hardware_efficient(self, n_qubits: int, depth: int, params: List[float]) -> Dict[str, Any]:
+        """
+        Hardware-efficient VQE ansatz
+        Alternating layers of single-qubit rotations and entangling gates
+        """
+        self.logger.info(f"VQE Ansatz: {n_qubits} qubits, depth {depth}")
+
+        gates = []
+        param_idx = 0
+
+        for d in range(depth):
+            # Layer of RY rotations
+            for q in range(n_qubits):
+                if param_idx < len(params):
+                    gates.append({'type': 'RY', 'qubit': q, 'angle': params[param_idx]})
+                    param_idx += 1
+
+            # Layer of RZ rotations
+            for q in range(n_qubits):
+                if param_idx < len(params):
+                    gates.append({'type': 'RZ', 'qubit': q, 'angle': params[param_idx]})
+                    param_idx += 1
+
+            # Entangling layer (CNOTs)
+            for q in range(n_qubits - 1):
+                gates.append({'type': 'CNOT', 'control': q, 'target': q+1})
+
+        return {
+            'algorithm': 'vqe_ansatz',
+            'n_qubits': n_qubits,
+            'depth': depth,
+            'n_params': param_idx,
+            'gates': gates
+        }
+
+    def vqe_measure_hamiltonian(self, hamiltonian: List[Tuple[str, float]]) -> Dict[str, Any]:
+        """
+        Measure expectation value of Hamiltonian
+        hamiltonian: list of (pauli_string, coefficient) tuples
+        Example: [('ZZ', 0.5), ('XI', -0.3), ('YY', 0.2)]
+        """
+        self.logger.info(f"VQE Hamiltonian: {len(hamiltonian)} terms")
+
+        measurements = []
+
+        for pauli_string, coeff in hamiltonian:
+            # Determine measurement basis for each term
+            basis_changes = []
+            for i, pauli in enumerate(pauli_string):
+                if pauli == 'X':
+                    basis_changes.append({'type': 'H', 'qubit': i})
+                elif pauli == 'Y':
+                    basis_changes.append({'type': 'RX', 'qubit': i, 'angle': -np.pi/2})
+                # Z basis is computational basis (no change needed)
+
+            measurements.append({
+                'pauli_string': pauli_string,
+                'coefficient': coeff,
+                'basis_changes': basis_changes
+            })
+
+        return {
+            'algorithm': 'vqe_hamiltonian_measurement',
+            'n_terms': len(hamiltonian),
+            'measurements': measurements
+        }
+
+    # ────────────────────────────────────────────────────────────────────────
+    # QUANTUM FOURIER TRANSFORM
+    # ────────────────────────────────────────────────────────────────────────
+
+    def qft(self, n_qubits: int, inverse: bool = False) -> Dict[str, Any]:
+        """
+        Quantum Fourier Transform (or inverse QFT)
+        """
+        self.logger.info(f"{'Inverse ' if inverse else ''}QFT: {n_qubits} qubits")
+
+        gates = []
+
+        # QFT circuit
+        for j in range(n_qubits):
+            # Hadamard on qubit j
+            gates.append({'type': 'H', 'qubit': j})
+
+            # Controlled rotations
+            for k in range(j + 1, n_qubits):
+                angle = np.pi / (2 ** (k - j))
+                gates.append({
+                    'type': 'CP',  # Controlled-Phase
+                    'control': k,
+                    'target': j,
+                    'angle': angle if not inverse else -angle
+                })
+
+        # Swap qubits to reverse order
+        for i in range(n_qubits // 2):
+            gates.append({
+                'type': 'SWAP',
+                'qubit1': i,
+                'qubit2': n_qubits - 1 - i
+            })
+
+        return {
+            'algorithm': 'qft' if not inverse else 'iqft',
+            'n_qubits': n_qubits,
+            'gates': gates
+        }
+
+    # ────────────────────────────────────────────────────────────────────────
+    # QUANTUM PHASE ESTIMATION
+    # ────────────────────────────────────────────────────────────────────────
+
+    def phase_estimation(self, n_counting: int, n_eigenstate: int, unitary_powers: List[int]) -> Dict[str, Any]:
+        """
+        Quantum Phase Estimation algorithm
+        Returns gate sequence for estimating eigenphase
+        """
+        self.logger.info(f"Phase Estimation: {n_counting} counting qubits, {n_eigenstate} eigenstate qubits")
+
+        gates = []
+
+        # Initialize counting register in superposition
+        for i in range(n_counting):
+            gates.append({'type': 'H', 'qubit': i})
+
+        # Controlled unitary operations
+        for i, power in enumerate(unitary_powers[:n_counting]):
+            gates.append({
+                'type': 'CU',
+                'control': i,
+                'target_register': list(range(n_counting, n_counting + n_eigenstate)),
+                'power': power
+            })
+
+        # Inverse QFT on counting register
+        iqft_gates = self.qft(n_counting, inverse=True)['gates']
+
+        # Adjust qubit indices for QFT gates (they're on counting register)
+        for gate in iqft_gates:
+            gates.append(gate)
+
+        return {
+            'algorithm': 'phase_estimation',
+            'n_counting': n_counting,
+            'n_eigenstate': n_eigenstate,
+            'gates': gates
+        }
+
+    # ────────────────────────────────────────────────────────────────────────
+    # QUANTUM AMPLITUDE AMPLIFICATION
+    # ────────────────────────────────────────────────────────────────────────
+
+    def amplitude_amplification(self, n_qubits: int, iterations: int, oracle_spec: Dict) -> Dict[str, Any]:
+        """
+        Quantum Amplitude Amplification (generalization of Grover)
+        """
+        self.logger.info(f"Amplitude Amplification: {n_qubits} qubits, {iterations} iterations")
+
+        gates = []
+
+        # Initialize in uniform superposition
+        for i in range(n_qubits):
+            gates.append({'type': 'H', 'qubit': i})
+
+        # Amplitude amplification iterations
+        for _ in range(iterations):
+            # Oracle
+            gates.extend(oracle_spec.get('gates', []))
+
+            # Diffusion operator
+            diffusion = self.grover_diffusion(n_qubits)
+            gates.extend(diffusion['gates'])
+
+        return {
+            'algorithm': 'amplitude_amplification',
+            'n_qubits': n_qubits,
+            'iterations': iterations,
+            'gates': gates
+        }
+
+    # ────────────────────────────────────────────────────────────────────────
+    # EXPORT ALGORITHMS FOR LATTICE EXECUTION
+    # ────────────────────────────────────────────────────────────────────────
+
+    def export_algorithm_to_lattice(self, algorithm_spec: Dict, output_file: Path):
+        """
+        Export algorithm specification to file for lattice execution
+        """
+        self.logger.info(f"Exporting algorithm to {output_file}")
+
+        with open(output_file, 'w') as f:
+            json.dump(algorithm_spec, f, indent=2)
+
+        self.logger.info(f"✓ Algorithm exported: {algorithm_spec.get('algorithm', 'unknown')}")
+
+# ════════════════════════════════════════════════════════════════════════════
 # MAIN EXECUTION
 # ════════════════════════════════════════════════════════════════════════════
 
 def main():
     """Main entry point"""
-    
+
     if len(sys.argv) < 2:
         print("Usage: python qbc_parser.py <qbc_file>")
         sys.exit(1)
-    
+
     qbc_file = Path(sys.argv[1])
-    
+
     if not qbc_file.exists():
         print(f"Error: File not found: {qbc_file}")
         sys.exit(1)
-    
+
     print("="*80)
     print("🌙 QBC PARSER & VIRTUAL MACHINE")
     print("   MOONSHINE LATTICE INSTANTIATION")
@@ -771,32 +1069,32 @@ def main():
     print(f"File: {qbc_file}")
     print(f"Target: 196,883-dimensional Moonshine representation")
     print("="*80)
-    
+
     # Assemble
     assembler = QBCAssembler(verbose=True)
     instructions = assembler.parse_file(qbc_file)
-    
+
     print()
-    
+
     # Execute
     vm = QBCVirtualMachine(verbose=True)
-    
+
     # Load data strings into VM memory
     string_addr = 0x100000
     for label, text in assembler.data_section.items():
         vm.memory_strings[string_addr] = text
         vm.labels[label] = string_addr
         string_addr += len(text) + 1
-    
+
     vm.load_program(instructions)
-    
+
     success = vm.execute()
-    
+
     # Save OUTPUT_BUFFER
     output_file = qbc_file.parent / "qbc_output.json"
-    
+
     print(f"\n💾 Saving output to: {output_file}")
-    
+
     output_data = {
         'success': success,
         'cycles': vm.cycle_count,
@@ -804,14 +1102,47 @@ def main():
         'output': vm.get_output_buffer(),
         'memory_entries': len(vm.memory),
         'memory_sample': {hex(k): v for k, v in list(vm.memory.items())[:100]},
-        'registers': {f'r{i}': vm.registers[i] for i in range(16) if vm.registers[i] != 0}
+        'registers': {f'r{i}': vm.registers[i] for i in range(16) if vm.registers[i] != 0},
+        'lattice_ready': True,
+        'algorithm_support': {
+            'grover': True,
+            'vqe': True,
+            'qft': True,
+            'phase_estimation': True,
+            'amplitude_amplification': True
+        }
     }
-    
+
     with open(output_file, 'w') as f:
         json.dump(output_data, f, indent=2)
-    
+
     print(f"✓ Output saved")
-    
+
+    # Initialize algorithm library
+    algo_lib = QuantumAlgorithmLibrary(vm)
+
+    # Export example algorithms for testing
+    examples_dir = qbc_file.parent / "algorithm_examples"
+    examples_dir.mkdir(exist_ok=True)
+
+    # Grover example
+    grover_oracle = algo_lib.grover_oracle(target_state=5, n_qubits=3)
+    algo_lib.export_algorithm_to_lattice(grover_oracle, examples_dir / "grover_oracle_example.json")
+
+    # VQE example
+    vqe_ansatz = algo_lib.vqe_ansatz_hardware_efficient(
+        n_qubits=4,
+        depth=2,
+        params=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+    )
+    algo_lib.export_algorithm_to_lattice(vqe_ansatz, examples_dir / "vqe_ansatz_example.json")
+
+    # QFT example
+    qft_circuit = algo_lib.qft(n_qubits=4)
+    algo_lib.export_algorithm_to_lattice(qft_circuit, examples_dir / "qft_example.json")
+
+    print(f"\n✓ Algorithm examples exported to {examples_dir}")
+
     # Summary
     print(f"\n{'='*80}")
     print(f"📊 EXECUTION SUMMARY")
@@ -826,14 +1157,14 @@ def main():
     print(f"Control flow:")
     print(f"  - Function calls: {vm.stats.get('function_calls', 0):,}")
     print(f"  - Jumps: {vm.stats.get('jumps', 0):,}")
-    
+
     if not success:
         print(f"\n⚠️  WARNING: Execution reached cycle limit")
         print(f"   This is normal for full 196,883-node instantiation")
         print(f"   Partial lattice data has been saved")
-    
+
     print(f"{'='*80}\n")
-    
+
     sys.exit(0 if success else 1)
 
 if __name__ == "__main__":

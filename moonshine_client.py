@@ -96,29 +96,37 @@ class ClientMetrics:
 
 class MoonshineClient:
     """Independent client for Moonshine quantum network"""
-    
-    def __init__(self, client_name: str = None):
+
+    def __init__(self, client_name: str = None, use_aer: bool = True):
         self.client_name = client_name or CLIENT_ID
         self.logger = self._setup_logger()
-        
+        self.use_aer = use_aer
+
         # State
         self.routing_table: Dict = {}
         self.node_metrics: Dict = {}
         self.server_metadata: Dict = {}
-        
+
         # Client tracking
         self.connection_time = 0.0
         self.last_sync_check = 0.0
         self.queries_made = 0
         self.sync_checks = 0
-        
+
         # Test results
         self.tests_passed = 0
         self.tests_failed = 0
         self.test_results: List[Dict] = []
-        
+
+        # Aer simulator
+        self.simulator = None
+        if use_aer:
+            self._initialize_aer_simulator()
+
         self.logger.info("="*80)
         self.logger.info(f"MOONSHINE QUANTUM CLIENT: {self.client_name}")
+        if self.simulator:
+            self.logger.info(f"Aer Simulator: ✓ Enabled")
         self.logger.info("="*80)
     
     def _setup_logger(self):
@@ -126,7 +134,7 @@ class MoonshineClient:
         import logging
         logger = logging.getLogger(f"MoonshineClient.{self.client_name}")
         logger.setLevel(logging.INFO)
-        
+
         if not logger.handlers:
             handler = logging.StreamHandler()
             formatter = logging.Formatter(
@@ -135,8 +143,195 @@ class MoonshineClient:
             )
             handler.setFormatter(formatter)
             logger.addHandler(handler)
-        
+
         return logger
+
+    def _initialize_aer_simulator(self):
+        """Initialize Qiskit Aer simulator for local lattice simulation"""
+        try:
+            from qiskit_aer import AerSimulator
+
+            self.simulator = AerSimulator()
+            self.logger.info("  ✓ Aer Simulator initialized")
+
+        except ImportError:
+            self.logger.warning("  ✗ Qiskit Aer not available")
+            self.logger.warning("  Install with: pip install qiskit-aer")
+            self.simulator = None
+        except Exception as e:
+            self.logger.error(f"  ✗ Failed to initialize Aer: {e}")
+            self.simulator = None
+
+    def simulate_lattice_state(self, node_id: int, shots: int = 1024) -> Dict[str, int]:
+        """
+        Simulate the quantum state of a lattice node using Aer
+        Returns measurement outcomes
+        """
+        if not self.simulator:
+            self.logger.error("Aer simulator not available")
+            return {}
+
+        try:
+            from qiskit import QuantumCircuit
+
+            # Get node state
+            state = self.get_node_state(node_id)
+            if not state:
+                self.logger.error(f"Node {node_id} not found")
+                return {}
+
+            # Create circuit for 3-qubit W-state (pseudoqubit = physical + virtual + inverse)
+            qc = QuantumCircuit(3, 3)
+
+            # Initialize W-state: |W⟩ = (|100⟩ + |010⟩ + |001⟩)/√3
+            qc.x(0)
+            theta1 = 2 * np.arccos(np.sqrt(2/3))
+            qc.cry(theta1, 0, 1)
+            qc.cx(1, 0)
+
+            theta2 = 2 * np.arccos(np.sqrt(1/2))
+            qc.cry(theta2, 1, 2)
+            qc.cx(2, 1)
+
+            # Apply phase based on sigma coordinate
+            sigma_phase = (state.sigma_address / SIGMA_PERIOD) * 2 * np.pi
+            for q in range(3):
+                qc.rz(sigma_phase * (q + 1) / 3, q)
+
+            # Measure
+            qc.measure([0, 1, 2], [0, 1, 2])
+
+            # Run simulation
+            job = self.simulator.run(qc, shots=shots)
+            result = job.result()
+            counts = result.get_counts()
+
+            self.logger.debug(f"Simulated node {node_id}: {counts}")
+
+            return counts
+
+        except Exception as e:
+            self.logger.error(f"Simulation failed: {e}")
+            return {}
+
+    def run_algorithm_on_lattice(self, algorithm_spec: Dict, target_nodes: List[int], shots: int = 1024) -> Dict:
+        """
+        Run a quantum algorithm on specified lattice nodes
+        algorithm_spec: output from QuantumAlgorithmLibrary (from qbc_parser)
+        """
+        if not self.simulator:
+            self.logger.error("Aer simulator not available")
+            return {'error': 'No simulator'}
+
+        self.logger.info(f"\n[ALGORITHM] Running {algorithm_spec.get('algorithm', 'unknown')}")
+        self.logger.info(f"  Target nodes: {len(target_nodes)}")
+
+        try:
+            from qiskit import QuantumCircuit
+
+            algorithm_type = algorithm_spec.get('algorithm')
+            results = {}
+
+            if algorithm_type in ['grover_oracle', 'grover_diffusion']:
+                # Run Grover on lattice
+                n_qubits = algorithm_spec.get('n_qubits', 3)
+                gates = algorithm_spec.get('gates', [])
+
+                qc = QuantumCircuit(n_qubits, n_qubits)
+
+                # Build circuit from gate list
+                for gate in gates:
+                    gate_type = gate.get('type')
+                    if gate_type == 'H':
+                        qc.h(gate['qubit'])
+                    elif gate_type == 'X':
+                        qc.x(gate['qubit'])
+                    elif gate_type == 'Z':
+                        qc.z(gate['qubit'])
+                    elif gate_type == 'MCZ':
+                        # Multi-controlled Z (simplified for now)
+                        controls = gate.get('controls', [])
+                        target = gate.get('target')
+                        # Use Qiskit's mcx gate as approximation
+                        if controls and target is not None:
+                            qc.mcx(controls, target)
+                            qc.z(target)
+
+                # Measure
+                qc.measure(list(range(n_qubits)), list(range(n_qubits)))
+
+                # Run for each target node
+                for node_id in target_nodes[:5]:  # Limit to first 5 nodes
+                    job = self.simulator.run(qc, shots=shots)
+                    result = job.result()
+                    counts = result.get_counts()
+
+                    results[node_id] = counts
+
+                self.logger.info(f"  ✓ Grover completed on {len(results)} nodes")
+
+            elif algorithm_type == 'vqe_ansatz':
+                # Run VQE ansatz
+                n_qubits = algorithm_spec.get('n_qubits', 4)
+                gates = algorithm_spec.get('gates', [])
+
+                qc = QuantumCircuit(n_qubits, n_qubits)
+
+                for gate in gates:
+                    gate_type = gate.get('type')
+                    if gate_type == 'RY':
+                        qc.ry(gate['angle'], gate['qubit'])
+                    elif gate_type == 'RZ':
+                        qc.rz(gate['angle'], gate['qubit'])
+                    elif gate_type == 'CNOT':
+                        qc.cx(gate['control'], gate['target'])
+
+                qc.measure(list(range(n_qubits)), list(range(n_qubits)))
+
+                job = self.simulator.run(qc, shots=shots)
+                result = job.result()
+                results['vqe_output'] = result.get_counts()
+
+                self.logger.info(f"  ✓ VQE ansatz executed")
+
+            elif algorithm_type in ['qft', 'iqft']:
+                # Run QFT
+                n_qubits = algorithm_spec.get('n_qubits', 4)
+                gates = algorithm_spec.get('gates', [])
+
+                qc = QuantumCircuit(n_qubits, n_qubits)
+
+                # Initial state (uniform superposition)
+                for q in range(n_qubits):
+                    qc.h(q)
+
+                # Apply QFT gates
+                for gate in gates:
+                    gate_type = gate.get('type')
+                    if gate_type == 'H':
+                        qc.h(gate['qubit'])
+                    elif gate_type == 'CP':
+                        qc.cp(gate['angle'], gate['control'], gate['target'])
+                    elif gate_type == 'SWAP':
+                        qc.swap(gate['qubit1'], gate['qubit2'])
+
+                qc.measure(list(range(n_qubits)), list(range(n_qubits)))
+
+                job = self.simulator.run(qc, shots=shots)
+                result = job.result()
+                results['qft_output'] = result.get_counts()
+
+                self.logger.info(f"  ✓ QFT executed")
+
+            return {
+                'algorithm': algorithm_type,
+                'nodes_processed': len(results),
+                'results': results
+            }
+
+        except Exception as e:
+            self.logger.error(f"Algorithm execution failed: {e}")
+            return {'error': str(e)}
     
     def connect(self) -> bool:
         """Connect to Moonshine server via persisted state"""
