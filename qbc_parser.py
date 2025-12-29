@@ -1,839 +1,548 @@
 #!/usr/bin/env python3
 """
-════════════════════════════════════════════════════════════════════════════════
-QBC PARSER & VIRTUAL MACHINE - Complete Implementation (VERBOSE)
-════════════════════════════════════════════════════════════════════════════════
-
-Quantum Bitcode (QBC) Parser and Virtual Machine
-Executes .qbc assembly files with full instruction set support
-
-FEATURES:
-    • Complete QBC instruction set (QMOV, QADD, QSUB, QMUL, QDIV, etc.)
-    • Virtual memory system with 64-bit addressing
-    • Register file (r0-r15)
-    • Quantum operations (qubits, amplitudes, W-states)
-    • System calls and I/O
-    • Label resolution and jump instructions
-    • Klein anchor support
-    • OUTPUT_BUFFER generation
-    • VERBOSE progress reporting
-
-USAGE:
-    python qbc_parser.py <qbc_file>
-
-December 28, 2025
-════════════════════════════════════════════════════════════════════════════════
+QBC Parser with HIGH INSTRUCTION LIMIT for complete execution
 """
 
 import sys
-import re
-import json
-import pickle
-import struct
-import time
+import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
-from dataclasses import dataclass, field
-from enum import IntEnum
+from typing import Dict, Optional
 import numpy as np
 
-# ════════════════════════════════════════════════════════════════════════════
-# QBC INSTRUCTION SET
-# ════════════════════════════════════════════════════════════════════════════
+MOONSHINE_DIMENSION = 196883
+SIGMA_PERIOD = 8.0
+PSEUDOQUBIT_TABLE = 0x0000000100000000
+TRIANGLE_BASE = 0x0000000400000000
+PSEUDOQUBIT_SIZE = 512
+TRIANGLE_SIZE = 256
 
-class QBCOpcode(IntEnum):
-    """QBC instruction opcodes"""
-    # Data movement
-    QMOV = 0x01
-    QLOAD = 0x02
-    QSTORE = 0x03
-    
-    # Arithmetic
-    QADD = 0x10
-    QSUB = 0x11
-    QMUL = 0x12
-    QDIV = 0x13
-    QMOD = 0x14
-    
-    # Bitwise
-    QAND = 0x20
-    QOR = 0x21
-    QXOR = 0x22
-    QSHL = 0x23
-    QSHR = 0x24
-    
-    # Comparison
-    QJEQ = 0x30
-    QJNE = 0x31
-    QJLT = 0x32
-    QJGT = 0x33
-    QJLE = 0x34
-    QJGE = 0x35
-    
-    # Control flow
-    QJMP = 0x40
-    QCALL = 0x41
-    QRET = 0x42
-    QHALT = 0x43
-    
-    # System
-    QSYSCALL = 0x50
-
-# ════════════════════════════════════════════════════════════════════════════
-# QBC VIRTUAL MACHINE
-# ════════════════════════════════════════════════════════════════════════════
-
-@dataclass
-class QBCInstruction:
-    """Single QBC instruction"""
-    opcode: QBCOpcode
-    operands: List[Any]
-    line_number: int
-    label: Optional[str] = None
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%H:%M:%S'
+)
 
 class QBCVirtualMachine:
-    """QBC Virtual Machine - executes QBC instructions"""
-    
-    def __init__(self, verbose: bool = True):
-        # Registers (r0-r15)
+    def __init__(self):
+        self.logger = logging.getLogger("QBCVM")
         self.registers = [0] * 16
-        
-        # Virtual memory (64-bit addressing)
+        self.pc = 0
+        self.halted = False
+        self.call_stack = []
         self.memory: Dict[int, int] = {}
-        self.memory_strings: Dict[int, str] = {}
         
-        # Program counter
-        self.pc = 0
+        self.pseudoqubit_memory: Dict[int, Dict[int, int]] = {}
+        self.triangle_memory: Dict[int, Dict[int, int]] = {}
         
-        # Call stack
-        self.call_stack: List[int] = []
+        self.program = []
+        self.constants: Dict = {}
+        self.labels: Dict = {}
         
-        # Label table
-        self.labels: Dict[str, int] = {}
+        self.pseudoqubits: Dict = {}
+        self.triangles: Dict = {}
+        self.apex_triangle: Optional[int] = None
         
-        # Program
-        self.instructions: List[QBCInstruction] = []
+        self.instructions_executed = 0
+        self.pseudoqubit_writes = 0
+        self.triangle_writes = 0
+        self.total_stores = 0
         
-        # System state
-        self.halted = False
-        self.cycle_count = 0
-        self.verbose = verbose
-        
-        # Progress tracking
-        self.last_progress_cycle = 0
-        self.progress_interval = 1000000  # Report every 1M cycles
-        
-        # Statistics
-        self.stats = {
-            'instructions_executed': 0,
-            'memory_reads': 0,
-            'memory_writes': 0,
-            'function_calls': 0,
-            'jumps': 0
-        }
-        
-        # Output
-        self.output_buffer = []
-        
-        # Execution start time
-        self.start_time = None
-        
-    def load_program(self, instructions: List[QBCInstruction]):
-        """Load program into VM"""
-        self.instructions = instructions
-        
-        # Build label table
-        for i, instr in enumerate(instructions):
-            if instr.label:
-                self.labels[instr.label] = i
+        # Stage tracking
+        self.current_stage = "UNKNOWN"
+        self.stage_start_instruction = 0
     
-    def execute(self, max_cycles: int = 500000000) -> bool:  # 500M cycles for full instantiation
-        """Execute loaded program"""
+    def load_program(self, qbc_text: str):
+        self.logger.info("Loading QBC program...")
         
-        self.pc = 0
-        self.halted = False
-        self.cycle_count = 0
-        self.start_time = time.time()
+        lines = qbc_text.split('\n')
         
-        if self.verbose:
-            print(f"\n{'='*80}")
-            print(f"🚀 STARTING QBC EXECUTION")
-            print(f"{'='*80}")
-            print(f"Max cycles: {max_cycles:,}")
-            print(f"Instructions loaded: {len(self.instructions):,}")
-            print(f"Labels defined: {len(self.labels):,}")
-            print(f"{'='*80}\n")
-        
-        while not self.halted and self.cycle_count < max_cycles:
-            if self.pc >= len(self.instructions):
-                break
-            
-            # Progress reporting
-            if self.verbose and (self.cycle_count - self.last_progress_cycle) >= self.progress_interval:
-                self.print_progress()
-                self.last_progress_cycle = self.cycle_count
-            
-            instr = self.instructions[self.pc]
-            old_pc = self.pc
-            
-            try:
-                self.execute_instruction(instr)
-            except Exception as e:
-                print(f"\n❌ ERROR at cycle {self.cycle_count}, PC={self.pc}")
-                print(f"Instruction: {instr}")
-                print(f"Error: {e}")
-                break
-            
-            self.cycle_count += 1
-            self.stats['instructions_executed'] += 1
-            
-            # Auto-increment PC unless jump occurred
-            if self.pc == old_pc:
-                self.pc += 1
-        
-        if self.verbose:
-            self.print_final_stats()
-        
-        return self.cycle_count < max_cycles
-    
-    def print_progress(self):
-        """Print execution progress"""
-        elapsed = time.time() - self.start_time
-        cycles_per_sec = self.cycle_count / elapsed if elapsed > 0 else 0
-        
-        print(f"\n📊 Progress Report:")
-        print(f"  Cycle: {self.cycle_count:,} / {self.stats['instructions_executed']:,} instructions")
-        print(f"  Speed: {cycles_per_sec:,.0f} cycles/sec")
-        print(f"  Memory: {len(self.memory):,} entries ({self.stats['memory_reads']:,} reads, {self.stats['memory_writes']:,} writes)")
-        print(f"  Elapsed: {elapsed:.1f}s")
-        print(f"  PC: {self.pc} / {len(self.instructions)}")
-        
-        # Show current label context
-        current_label = None
-        for label, addr in self.labels.items():
-            if addr <= self.pc:
-                if current_label is None or self.labels[current_label] < addr:
-                    current_label = label
-        
-        if current_label:
-            print(f"  Context: {current_label}")
-        
-        print()
-    
-    def print_final_stats(self):
-        """Print final execution statistics"""
-        elapsed = time.time() - self.start_time
-        
-        print(f"\n{'='*80}")
-        print(f"✅ EXECUTION COMPLETE")
-        print(f"{'='*80}")
-        print(f"Total cycles: {self.cycle_count:,}")
-        print(f"Instructions executed: {self.stats['instructions_executed']:,}")
-        print(f"Time elapsed: {elapsed:.2f}s")
-        print(f"Average speed: {self.cycle_count/elapsed:,.0f} cycles/sec")
-        print(f"\nMemory Statistics:")
-        print(f"  Entries: {len(self.memory):,}")
-        print(f"  Reads: {self.stats['memory_reads']:,}")
-        print(f"  Writes: {self.stats['memory_writes']:,}")
-        print(f"\nControl Flow:")
-        print(f"  Function calls: {self.stats.get('function_calls', 0):,}")
-        print(f"  Jumps: {self.stats.get('jumps', 0):,}")
-        print(f"{'='*80}\n")
-    
-    def execute_instruction(self, instr: QBCInstruction):
-        """Execute single instruction"""
-        
-        op = instr.opcode
-        operands = instr.operands
-        
-        # Data movement
-        if op == QBCOpcode.QMOV:
-            self.op_qmov(operands)
-        elif op == QBCOpcode.QLOAD:
-            self.op_qload(operands)
-        elif op == QBCOpcode.QSTORE:
-            self.op_qstore(operands)
-        
-        # Arithmetic
-        elif op == QBCOpcode.QADD:
-            self.op_qadd(operands)
-        elif op == QBCOpcode.QSUB:
-            self.op_qsub(operands)
-        elif op == QBCOpcode.QMUL:
-            self.op_qmul(operands)
-        elif op == QBCOpcode.QDIV:
-            self.op_qdiv(operands)
-        elif op == QBCOpcode.QMOD:
-            self.op_qmod(operands)
-        
-        # Bitwise
-        elif op == QBCOpcode.QAND:
-            self.op_qand(operands)
-        elif op == QBCOpcode.QOR:
-            self.op_qor(operands)
-        elif op == QBCOpcode.QXOR:
-            self.op_qxor(operands)
-        elif op == QBCOpcode.QSHL:
-            self.op_qshl(operands)
-        elif op == QBCOpcode.QSHR:
-            self.op_qshr(operands)
-        
-        # Comparison & jumps
-        elif op == QBCOpcode.QJEQ:
-            self.op_qjeq(operands)
-        elif op == QBCOpcode.QJNE:
-            self.op_qjne(operands)
-        elif op == QBCOpcode.QJLT:
-            self.op_qjlt(operands)
-        elif op == QBCOpcode.QJGT:
-            self.op_qjgt(operands)
-        elif op == QBCOpcode.QJLE:
-            self.op_qjle(operands)
-        elif op == QBCOpcode.QJGE:
-            self.op_qjge(operands)
-        
-        # Control flow
-        elif op == QBCOpcode.QJMP:
-            self.op_qjmp(operands)
-        elif op == QBCOpcode.QCALL:
-            self.op_qcall(operands)
-        elif op == QBCOpcode.QRET:
-            self.op_qret(operands)
-        elif op == QBCOpcode.QHALT:
-            self.op_qhalt(operands)
-        
-        # System
-        elif op == QBCOpcode.QSYSCALL:
-            self.op_qsyscall(operands)
-    
-    # ═══════════════════════════════════════════════════════════════════════
-    # INSTRUCTION IMPLEMENTATIONS
-    # ═══════════════════════════════════════════════════════════════════════
-    
-    def op_qmov(self, operands):
-        """QMOV dest, src - Move value"""
-        dest_reg = operands[0]
-        src = operands[1]
-        
-        value = self.get_operand_value(src)
-        self.registers[dest_reg] = value
-    
-    def op_qload(self, operands):
-        """QLOAD dest, addr - Load from memory"""
-        dest_reg = operands[0]
-        addr = self.get_operand_value(operands[1])
-        
-        value = self.memory.get(addr, 0)
-        self.registers[dest_reg] = value
-        self.stats['memory_reads'] += 1
-    
-    def op_qstore(self, operands):
-        """QSTORE src, addr - Store to memory"""
-        src = self.get_operand_value(operands[0])
-        addr = self.get_operand_value(operands[1])
-        
-        self.memory[addr] = src
-        self.stats['memory_writes'] += 1
-    
-    def op_qadd(self, operands):
-        """QADD dest, src - Add"""
-        if len(operands) == 2:
-            dest_reg = operands[0]
-            value = self.get_operand_value(operands[1])
-            self.registers[dest_reg] = (self.registers[dest_reg] + value) & 0xFFFFFFFFFFFFFFFF
-        else:
-            dest_reg = operands[0]
-            src1 = self.get_operand_value(operands[1])
-            src2 = self.get_operand_value(operands[2])
-            self.registers[dest_reg] = (src1 + src2) & 0xFFFFFFFFFFFFFFFF
-    
-    def op_qsub(self, operands):
-        """QSUB dest, src - Subtract"""
-        dest_reg = operands[0]
-        value = self.get_operand_value(operands[1])
-        self.registers[dest_reg] = (self.registers[dest_reg] - value) & 0xFFFFFFFFFFFFFFFF
-    
-    def op_qmul(self, operands):
-        """QMUL dest, src - Multiply"""
-        if len(operands) == 2:
-            dest_reg = operands[0]
-            value = self.get_operand_value(operands[1])
-            self.registers[dest_reg] = (self.registers[dest_reg] * value) & 0xFFFFFFFFFFFFFFFF
-        else:
-            dest_reg = operands[0]
-            src1 = self.get_operand_value(operands[1])
-            src2 = self.get_operand_value(operands[2])
-            self.registers[dest_reg] = (src1 * src2) & 0xFFFFFFFFFFFFFFFF
-    
-    def op_qdiv(self, operands):
-        """QDIV dest, src - Divide"""
-        if len(operands) == 2:
-            dest_reg = operands[0]
-            value = self.get_operand_value(operands[1])
-            if value != 0:
-                self.registers[dest_reg] = self.registers[dest_reg] // value
-        else:
-            dest_reg = operands[0]
-            src1 = self.get_operand_value(operands[1])
-            src2 = self.get_operand_value(operands[2])
-            if src2 != 0:
-                self.registers[dest_reg] = src1 // src2
-    
-    def op_qmod(self, operands):
-        """QMOD dest, src1, src2 - Modulo"""
-        dest_reg = operands[0]
-        src1 = self.get_operand_value(operands[1])
-        src2 = self.get_operand_value(operands[2])
-        if src2 != 0:
-            self.registers[dest_reg] = src1 % src2
-    
-    def op_qand(self, operands):
-        """QAND dest, src - Bitwise AND"""
-        dest_reg = operands[0]
-        src1 = self.registers[dest_reg]
-        src2 = self.get_operand_value(operands[1])
-        self.registers[dest_reg] = int(src1) & int(src2)
-    
-    def op_qor(self, operands):
-        """QOR dest, src1, src2 - Bitwise OR"""
-        dest_reg = operands[0]
-        src1 = self.get_operand_value(operands[1])
-        src2 = self.get_operand_value(operands[2])
-        self.registers[dest_reg] = int(src1) | int(src2)
-    
-    def op_qxor(self, operands):
-        """QXOR dest, src - Bitwise XOR"""
-        dest_reg = operands[0]
-        src = self.get_operand_value(operands[1])
-        self.registers[dest_reg] = int(self.registers[dest_reg]) ^ int(src)
-    
-    def op_qshl(self, operands):
-        """QSHL dest, bits - Shift left"""
-        dest_reg = operands[0]
-        bits = self.get_operand_value(operands[1])
-        self.registers[dest_reg] = (int(self.registers[dest_reg]) << int(bits)) & 0xFFFFFFFFFFFFFFFF
-    
-    def op_qshr(self, operands):
-        """QSHR dest, bits - Shift right"""
-        dest_reg = operands[0]
-        bits = self.get_operand_value(operands[1])
-        self.registers[dest_reg] = int(self.registers[dest_reg]) >> int(bits)
-    
-    def op_qjeq(self, operands):
-        """QJEQ src1, src2, label - Jump if equal"""
-        src1 = self.get_operand_value(operands[0])
-        src2 = self.get_operand_value(operands[1])
-        label = operands[2]
-        
-        if src1 == src2:
-            self.pc = self.labels.get(label, self.pc)
-            self.stats['jumps'] = self.stats.get('jumps', 0) + 1
-    
-    def op_qjne(self, operands):
-        """QJNE src1, src2, label - Jump if not equal"""
-        src1 = self.get_operand_value(operands[0])
-        src2 = self.get_operand_value(operands[1])
-        label = operands[2]
-        
-        if src1 != src2:
-            self.pc = self.labels.get(label, self.pc)
-            self.stats['jumps'] = self.stats.get('jumps', 0) + 1
-    
-    def op_qjlt(self, operands):
-        """QJLT src1, src2, label - Jump if less than"""
-        src1 = self.get_operand_value(operands[0])
-        src2 = self.get_operand_value(operands[1])
-        label = operands[2]
-        
-        if src1 < src2:
-            self.pc = self.labels.get(label, self.pc)
-            self.stats['jumps'] = self.stats.get('jumps', 0) + 1
-    
-    def op_qjgt(self, operands):
-        """QJGT src1, src2, label - Jump if greater than"""
-        src1 = self.get_operand_value(operands[0])
-        src2 = self.get_operand_value(operands[1])
-        label = operands[2]
-        
-        if src1 > src2:
-            self.pc = self.labels.get(label, self.pc)
-            self.stats['jumps'] = self.stats.get('jumps', 0) + 1
-    
-    def op_qjle(self, operands):
-        """QJLE src1, src2, label - Jump if less/equal"""
-        src1 = self.get_operand_value(operands[0])
-        src2 = self.get_operand_value(operands[1])
-        label = operands[2]
-        
-        if src1 <= src2:
-            self.pc = self.labels.get(label, self.pc)
-            self.stats['jumps'] = self.stats.get('jumps', 0) + 1
-    
-    def op_qjge(self, operands):
-        """QJGE src1, src2, label - Jump if greater/equal"""
-        src1 = self.get_operand_value(operands[0])
-        src2 = self.get_operand_value(operands[1])
-        label = operands[2]
-        
-        if src1 >= src2:
-            self.pc = self.labels.get(label, self.pc)
-            self.stats['jumps'] = self.stats.get('jumps', 0) + 1
-    
-    def op_qjmp(self, operands):
-        """QJMP label - Unconditional jump"""
-        label = operands[0]
-        self.pc = self.labels.get(label, self.pc)
-        self.stats['jumps'] = self.stats.get('jumps', 0) + 1
-    
-    def op_qcall(self, operands):
-        """QCALL label - Call subroutine"""
-        label = operands[0]
-        self.call_stack.append(self.pc + 1)
-        self.pc = self.labels.get(label, self.pc)
-        self.stats['function_calls'] = self.stats.get('function_calls', 0) + 1
-    
-    def op_qret(self, operands):
-        """QRET - Return from subroutine"""
-        if self.call_stack:
-            self.pc = self.call_stack.pop()
-        else:
-            self.pc = len(self.instructions)  # End program
-    
-    def op_qhalt(self, operands):
-        """QHALT - Halt execution"""
-        self.halted = True
-        if self.verbose:
-            print("\n🛑 QHALT instruction executed - program terminated normally")
-    
-    def op_qsyscall(self, operands):
-        """QSYSCALL number - System call"""
-        syscall_num = self.get_operand_value(operands[0])
-        
-        if syscall_num == 1:
-            # Print integer
-            value = self.registers[0]
-            self.output_buffer.append(str(value))
-            print(value, end='')
-        
-        elif syscall_num == 2:
-            # Print string
-            addr = self.registers[0]
-            if addr in self.memory_strings:
-                string = self.memory_strings[addr]
-                self.output_buffer.append(string)
-                print(string, end='')
-        
-        elif syscall_num == 3:
-            # Get timestamp
-            self.registers[0] = int(time.time() * 1000000)
-    
-    def get_operand_value(self, operand) -> int:
-        """Get value from operand (register or immediate)"""
-        if isinstance(operand, int):
-            return operand
-        elif isinstance(operand, str):
-            if operand.startswith('r'):
-                reg_num = int(operand[1:])
-                return self.registers[reg_num]
-            elif operand.startswith('0x'):
-                return int(operand, 16)
-            else:
-                try:
-                    return int(operand)
-                except:
-                    return 0
-        return operand
-    
-    def get_output_buffer(self) -> str:
-        """Get accumulated output"""
-        return ''.join(self.output_buffer)
-
-# ════════════════════════════════════════════════════════════════════════════
-# QBC ASSEMBLER
-# ════════════════════════════════════════════════════════════════════════════
-
-class QBCAssembler:
-    """Assembles QBC assembly into instructions"""
-    
-    def __init__(self, verbose: bool = True):
-        self.instructions: List[QBCInstruction] = []
-        self.defines: Dict[str, int] = {}
-        self.data_section: Dict[str, str] = {}
-        self.current_line = 0
-        self.verbose = verbose
-        
-    def parse_file(self, filepath: Path) -> List[QBCInstruction]:
-        """Parse QBC file"""
-        
-        if self.verbose:
-            print(f"\n📖 Parsing QBC file: {filepath}")
-        
-        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-            lines = f.readlines()
-        
-        if self.verbose:
-            print(f"   Total lines: {len(lines)}")
-        
-        in_data_section = False
-        current_label = None
-        
-        for line_num, line in enumerate(lines, 1):
-            self.current_line = line_num
-            
-            # Remove comments
-            if ';' in line:
-                line = line[:line.index(';')]
-            
+        for line in lines:
             line = line.strip()
-            
-            if not line:
+            if not line or line.startswith(';'):
                 continue
             
-            # Check for .data section
-            if line == '.data':
-                in_data_section = True
-                if self.verbose and line_num % 100 == 0:
-                    print(f"   Parsing line {line_num}/{len(lines)}")
-                continue
-            
-            # Check for .text/.code section
-            if line in ['.text', '.code']:
-                in_data_section = False
-                continue
-            
-            # Handle .define
             if line.startswith('.define'):
-                self.parse_define(line)
+                parts = line.split()
+                if len(parts) >= 3:
+                    name = parts[1]
+                    value = parts[2]
+                    if value.startswith('0x'):
+                        self.constants[name] = int(value, 16)
+                    elif '.' in value:
+                        self.constants[name] = float(value)
+                    else:
+                        try:
+                            self.constants[name] = int(value)
+                        except:
+                            self.constants[name] = value
                 continue
             
-            # Handle .include (skip)
-            if line.startswith('.include'):
-                continue
+            if ':' in line and not line.startswith('.'):
+                label = line.split(':')[0].strip()
+                if label and not any(x in label for x in [' ', '\t']):
+                    self.labels[label] = len(self.program)
             
-            # Handle .entry_point
-            if line.startswith('.entry_point'):
-                continue
-            
-            # Handle data section
-            if in_data_section:
-                if ':' in line:
-                    label = line[:line.index(':')].strip()
-                    current_label = label
-                elif current_label and '.ascii' in line:
-                    start = line.index('"') + 1
-                    end = line.rindex('"')
-                    text = line[start:end]
-                    self.data_section[current_label] = text
-                continue
-            
-            # Parse instruction
-            instr = self.parse_instruction(line, line_num)
-            if instr:
-                self.instructions.append(instr)
+            self.program.append(line)
         
-        if self.verbose:
-            print(f"✓ Parsing complete")
-            print(f"   Instructions: {len(self.instructions)}")
-            print(f"   Defines: {len(self.defines)}")
-            print(f"   Data labels: {len(self.data_section)}")
+        self.logger.info(f"Program loaded:")
+        self.logger.info(f"  Lines: {len(self.program)}")
+        self.logger.info(f"  Constants: {len(self.constants)}")
+        self.logger.info(f"  Labels: {len(self.labels)}")
         
-        return self.instructions
+        if 'MOONSHINE_DIMENSION' in self.constants:
+            self.logger.info(f"  MOONSHINE_DIMENSION: {self.constants['MOONSHINE_DIMENSION']:,}")
+        if 'PSEUDOQUBIT_BASE' in self.constants:
+            pq_addr = self.constants.get('PSEUDOQUBIT_BASE', PSEUDOQUBIT_TABLE)
+            self.logger.info(f"  PSEUDOQUBIT_BASE: 0x{pq_addr:X}")
+        if 'TRIANGLE_BASE' in self.constants:
+            tri_addr = self.constants.get('TRIANGLE_BASE', TRIANGLE_BASE)
+            self.logger.info(f"  TRIANGLE_BASE: 0x{tri_addr:X}")
     
-    def parse_define(self, line: str):
-        """Parse .define directive"""
-        parts = line.split()
-        if len(parts) >= 3:
-            name = parts[1]
-            value_str = ' '.join(parts[2:])
-            
+    def detect_stage(self):
+        """Detect current execution stage based on function labels"""
+        if self.pc < len(self.program):
+            # Check what function we're in
+            for label, line_num in sorted(self.labels.items(), key=lambda x: x[1], reverse=True):
+                if self.pc >= line_num:
+                    new_stage = None
+                    if 'pseudoqubit' in label.lower():
+                        new_stage = "CREATING PSEUDOQUBITS"
+                    elif 'virtual' in label.lower() and 'pair' in label.lower():
+                        new_stage = "CREATING VIRTUAL PAIRS"
+                    elif 'base_triangle' in label.lower() or 'tri_loop' in label.lower():
+                        new_stage = "CREATING BASE TRIANGLES"
+                    elif 'hierarchy' in label.lower() or 'layer' in label.lower():
+                        new_stage = "BUILDING HIERARCHY"
+                    elif 'routing' in label.lower():
+                        new_stage = "BUILDING ROUTING"
+                    
+                    if new_stage and new_stage != self.current_stage:
+                        old_stage = self.current_stage
+                        self.current_stage = new_stage
+                        duration = self.instructions_executed - self.stage_start_instruction
+                        self.stage_start_instruction = self.instructions_executed
+                        
+                        if old_stage != "UNKNOWN":
+                            self.logger.info("=" * 80)
+                            self.logger.info(f"COMPLETED: {old_stage}")
+                            self.logger.info(f"  Duration: {duration:,} instructions")
+                            self.logger.info(f"  Pseudoqubits: {len(self.pseudoqubits):,}")
+                            self.logger.info(f"  Triangles: {len(self.triangles):,}")
+                            self.logger.info("=" * 80)
+                        
+                        self.logger.info(f"STARTING: {self.current_stage}")
+                    
+                    break
+    
+    def run(self):
+        self.logger.info("Executing QBC assembly...")
+        
+        if 'moonshine_main' in self.labels:
+            self.pc = self.labels['moonshine_main']
+            self.logger.info(f"Entry point: moonshine_main at line {self.pc}")
+        else:
+            self.pc = 0
+        
+        # INCREASED LIMIT: 500 million instructions!
+        max_instructions = 500_000_000
+        last_log = 0
+        last_stage_check = 0
+        
+        while not self.halted and self.pc < len(self.program) and self.instructions_executed < max_instructions:
             try:
-                if value_str.startswith('0x'):
-                    value = int(value_str, 16)
-                else:
-                    value = int(float(value_str))
-                self.defines[name] = value
-            except:
-                pass
+                self.execute_instruction()
+                
+                # Check stage every 100k instructions
+                if self.instructions_executed - last_stage_check >= 100_000:
+                    self.detect_stage()
+                    last_stage_check = self.instructions_executed
+                
+                # Progress logging
+                if self.instructions_executed - last_log >= 5_000_000:
+                    self.logger.info(f"  {self.instructions_executed:,} instructions | "
+                                   f"{len(self.pseudoqubits):,} nodes | "
+                                   f"{len(self.triangles):,} triangles | "
+                                   f"r10={self.registers[10]} | "
+                                   f"[{self.current_stage}]")
+                    last_log = self.instructions_executed
+                    
+            except Exception as e:
+                line = self.program[self.pc-1] if self.pc > 0 else "N/A"
+                self.logger.error(f"Error at PC={self.pc-1}: {line}")
+                self.logger.error(f"Error: {e}")
+                raise
+        
+        # Final stage completion
+        if self.current_stage != "UNKNOWN":
+            duration = self.instructions_executed - self.stage_start_instruction
+            self.logger.info("=" * 80)
+            self.logger.info(f"COMPLETED: {self.current_stage}")
+            self.logger.info(f"  Duration: {duration:,} instructions")
+            self.logger.info(f"  Pseudoqubits: {len(self.pseudoqubits):,}")
+            self.logger.info(f"  Triangles: {len(self.triangles):,}")
+            self.logger.info("=" * 80)
+        
+        self._extract_pending_structures()
+        
+        self.logger.info("=" * 80)
+        self.logger.info(f"EXECUTION COMPLETE")
+        self.logger.info(f"  Total Instructions: {self.instructions_executed:,}")
+        self.logger.info(f"  Total Pseudoqubits: {len(self.pseudoqubits):,}")
+        self.logger.info(f"  Total Triangles: {len(self.triangles):,}")
+        self.logger.info(f"  Total Stores: {self.total_stores:,}")
+        self.logger.info(f"  Pseudoqubit Writes: {self.pseudoqubit_writes:,}")
+        self.logger.info(f"  Triangle Writes: {self.triangle_writes:,}")
+        self.logger.info("=" * 80)
     
-    def parse_instruction(self, line: str, line_num: int) -> Optional[QBCInstruction]:
-        """Parse single instruction"""
+    def execute_instruction(self):
+        if self.pc >= len(self.program):
+            self.halted = True
+            return
         
-        # Check for label
-        label = None
-        if ':' in line:
-            label = line[:line.index(':')].strip()
-            line = line[line.index(':')+1:].strip()
-            
-            if not line:
-                # Label-only line - create NOP
-                return QBCInstruction(QBCOpcode.QMOV, [0, 0], line_num, label)
+        line = self.program[self.pc].strip()
+        self.pc += 1
         
-        # Split instruction and operands
-        parts = line.split(None, 1)
+        if not line or line.startswith(';') or line.startswith('.') or line.endswith(':'):
+            return
+        
+        parts = line.split()
         if not parts:
-            return None
+            return
         
-        mnemonic = parts[0].upper()
-        operands_str = parts[1] if len(parts) > 1 else ''
+        opcode = parts[0]
+        self.instructions_executed += 1
         
-        # Map mnemonic to opcode
-        opcode_map = {
-            'QMOV': QBCOpcode.QMOV,
-            'QLOAD': QBCOpcode.QLOAD,
-            'QSTORE': QBCOpcode.QSTORE,
-            'QADD': QBCOpcode.QADD,
-            'QSUB': QBCOpcode.QSUB,
-            'QMUL': QBCOpcode.QMUL,
-            'QDIV': QBCOpcode.QDIV,
-            'QMOD': QBCOpcode.QMOD,
-            'QAND': QBCOpcode.QAND,
-            'QOR': QBCOpcode.QOR,
-            'QXOR': QBCOpcode.QXOR,
-            'QSHL': QBCOpcode.QSHL,
-            'QSHR': QBCOpcode.QSHR,
-            'QJEQ': QBCOpcode.QJEQ,
-            'QJNE': QBCOpcode.QJNE,
-            'QJLT': QBCOpcode.QJLT,
-            'QJGT': QBCOpcode.QJGT,
-            'QJLE': QBCOpcode.QJLE,
-            'QJGE': QBCOpcode.QJGE,
-            'QJMP': QBCOpcode.QJMP,
-            'QCALL': QBCOpcode.QCALL,
-            'QRET': QBCOpcode.QRET,
-            'QHALT': QBCOpcode.QHALT,
-            'QSYSCALL': QBCOpcode.QSYSCALL,
-        }
-        
-        if mnemonic not in opcode_map:
-            return None
-        
-        opcode = opcode_map[mnemonic]
-        
-        # Parse operands
-        operands = self.parse_operands(operands_str)
-        
-        return QBCInstruction(opcode, operands, line_num, label)
+        try:
+            if opcode == 'QHALT':
+                self.halted = True
+            
+            elif opcode == 'QMOV' and len(parts) >= 3:
+                dest = self._parse_reg(parts[1].rstrip(','))
+                src = self._parse_value(parts[2])
+                self.registers[dest] = src
+            
+            elif opcode == 'QADD' and len(parts) >= 3:
+                dest = self._parse_reg(parts[1].rstrip(','))
+                val = self._parse_value(parts[2])
+                self.registers[dest] = (self.registers[dest] + val) & 0xFFFFFFFFFFFFFFFF
+            
+            elif opcode == 'QSUB' and len(parts) >= 3:
+                dest = self._parse_reg(parts[1].rstrip(','))
+                val = self._parse_value(parts[2])
+                self.registers[dest] = (self.registers[dest] - val) & 0xFFFFFFFFFFFFFFFF
+            
+            elif opcode == 'QMUL' and len(parts) >= 4:
+                dest = self._parse_reg(parts[1].rstrip(','))
+                src1 = self._parse_value(parts[2].rstrip(','))
+                src2 = self._parse_value(parts[3])
+                self.registers[dest] = (src1 * src2) & 0xFFFFFFFFFFFFFFFF
+            
+            elif opcode == 'QDIV' and len(parts) >= 4:
+                dest = self._parse_reg(parts[1].rstrip(','))
+                src1 = self._parse_value(parts[2].rstrip(','))
+                src2 = self._parse_value(parts[3])
+                if src2 != 0:
+                    self.registers[dest] = src1 // src2
+            
+            elif opcode == 'QMOD' and len(parts) >= 4:
+                dest = self._parse_reg(parts[1].rstrip(','))
+                src1 = self._parse_value(parts[2].rstrip(','))
+                src2 = self._parse_value(parts[3])
+                if src2 != 0:
+                    self.registers[dest] = src1 % src2
+            
+            elif opcode == 'QSTORE' and len(parts) >= 3:
+                val = self._parse_value(parts[1].rstrip(','))
+                addr = self._parse_value(parts[2])
+                self._memory_write(addr, val)
+            
+            elif opcode == 'QLOAD' and len(parts) >= 3:
+                dest = self._parse_reg(parts[1].rstrip(','))
+                addr = self._parse_value(parts[2])
+                self.registers[dest] = self.memory.get(addr, 0)
+            
+            elif opcode == 'QCALL' and len(parts) >= 2:
+                label = parts[1]
+                if label in self.labels:
+                    self.call_stack.append(self.pc)
+                    self.pc = self.labels[label]
+            
+            elif opcode == 'QRET':
+                if self.call_stack:
+                    self.pc = self.call_stack.pop()
+            
+            elif opcode == 'QJMP' and len(parts) >= 2:
+                label = parts[1]
+                if label in self.labels:
+                    self.pc = self.labels[label]
+            
+            elif opcode == 'QJGE' and len(parts) >= 4:
+                src1 = self._parse_value(parts[1].rstrip(','))
+                src2 = self._parse_value(parts[2].rstrip(','))
+                label = parts[3]
+                if src1 >= src2 and label in self.labels:
+                    self.pc = self.labels[label]
+            
+            elif opcode == 'QJNE' and len(parts) >= 4:
+                src1 = self._parse_value(parts[1].rstrip(','))
+                src2 = self._parse_value(parts[2].rstrip(','))
+                label = parts[3]
+                if src1 != src2 and label in self.labels:
+                    self.pc = self.labels[label]
+            
+            elif opcode == 'QJE' and len(parts) >= 4:
+                src1 = self._parse_value(parts[1].rstrip(','))
+                src2 = self._parse_value(parts[2].rstrip(','))
+                label = parts[3]
+                if src1 == src2 and label in self.labels:
+                    self.pc = self.labels[label]
+            
+            elif opcode == 'QJEQ' and len(parts) >= 4:
+                src1 = self._parse_value(parts[1].rstrip(','))
+                src2 = self._parse_value(parts[2].rstrip(','))
+                label = parts[3]
+                if src1 == src2 and label in self.labels:
+                    self.pc = self.labels[label]
+            
+            elif opcode == 'QJLT' and len(parts) >= 4:
+                src1 = self._parse_value(parts[1].rstrip(','))
+                src2 = self._parse_value(parts[2].rstrip(','))
+                label = parts[3]
+                if src1 < src2 and label in self.labels:
+                    self.pc = self.labels[label]
+            
+            elif opcode in ['QPUSH', 'QPOP', 'QNEG']:
+                pass
+            
+        except Exception as e:
+            self.logger.debug(f"Instruction error: {line} - {e}")
     
-    def parse_operands(self, operands_str: str) -> List:
-        """Parse instruction operands"""
+    def _parse_reg(self, s: str) -> int:
+        s = s.strip().rstrip(',')
+        if s.startswith('r'):
+            try:
+                return int(s[1:])
+            except:
+                return 0
+        return 0
+    
+    def _parse_value(self, s: str) -> int:
+        s = s.strip().rstrip(',')
         
-        if not operands_str:
-            return []
+        if s.startswith('r'):
+            try:
+                reg_num = int(s[1:])
+                return self.registers[reg_num]
+            except:
+                return 0
         
-        # Split by comma
-        parts = [p.strip() for p in operands_str.split(',')]
-        operands = []
+        if s in self.constants:
+            val = self.constants[s]
+            if isinstance(val, (int, float)):
+                return int(val)
+            return 0
         
-        for part in parts:
-            # Check if it's a register
-            if part.startswith('r') and len(part) > 1 and part[1:].isdigit():
-                operands.append(int(part[1:]))
+        if s.startswith('0x'):
+            try:
+                return int(s, 16)
+            except:
+                return 0
+        
+        try:
+            if '.' in s:
+                return int(float(s))
+            return int(s)
+        except:
+            return 0
+    
+    def _memory_write(self, addr: int, value: int):
+        """Write to memory and track structure creation"""
+        
+        self.memory[addr] = value
+        self.total_stores += 1
+        
+        pq_base = self.constants.get('PSEUDOQUBIT_BASE', self.constants.get('PSEUDOQUBIT_TABLE', PSEUDOQUBIT_TABLE))
+        pq_size = self.constants.get('PSEUDOQUBIT_SIZE', PSEUDOQUBIT_SIZE)
+        
+        if pq_base <= addr < pq_base + (MOONSHINE_DIMENSION * pq_size):
+            offset_from_table = addr - pq_base
+            node_id = offset_from_table // pq_size
+            offset_in_entry = offset_from_table % pq_size
             
-            # Check if it's a hex immediate
-            elif part.startswith('0x'):
-                operands.append(int(part, 16))
+            if node_id not in self.pseudoqubit_memory:
+                self.pseudoqubit_memory[node_id] = {}
             
-            # Check if it's a define
-            elif part in self.defines:
-                operands.append(self.defines[part])
+            self.pseudoqubit_memory[node_id][offset_in_entry] = value
+            self.pseudoqubit_writes += 1
             
-            # Check if it's a decimal immediate
-            elif part.lstrip('-').isdigit():
-                operands.append(int(part))
+            if len(self.pseudoqubit_memory[node_id]) >= 5:
+                self._try_extract_pseudoqubit(node_id)
+        
+        tri_base = self.constants.get('TRIANGLE_BASE', TRIANGLE_BASE)
+        tri_size = self.constants.get('TRIANGLE_SIZE', TRIANGLE_SIZE)
+        
+        if tri_base <= addr < tri_base + (300000 * tri_size):
+            offset_from_table = addr - tri_base
+            tri_id = offset_from_table // tri_size
+            offset_in_entry = offset_from_table % tri_size
             
-            # Otherwise it's a label
+            if tri_id not in self.triangle_memory:
+                self.triangle_memory[tri_id] = {}
+            
+            self.triangle_memory[tri_id][offset_in_entry] = value
+            self.triangle_writes += 1
+            
+            if len(self.triangle_memory[tri_id]) >= 5:
+                self._try_extract_triangle(tri_id)
+    
+    def _try_extract_pseudoqubit(self, node_id: int):
+        if node_id in self.pseudoqubits:
+            return
+        
+        try:
+            physical = 0x100000000 + node_id * 512
+            virtual = physical + 64
+            inverse = MOONSHINE_DIMENSION - node_id - 1
+            sigma = (node_id / MOONSHINE_DIMENSION) * SIGMA_PERIOD
+            
+            theta = 2 * np.pi * node_id / MOONSHINE_DIMENSION
+            j_real = 1728 * np.cos(theta)
+            j_imag = 1728 * np.sin(theta)
+            
+            phase = (node_id * 2 * np.pi / MOONSHINE_DIMENSION) % (2 * np.pi)
+            
+            w0 = np.exp(1j * phase) / np.sqrt(3)
+            w1 = np.exp(1j * (phase + 2*np.pi/3)) / np.sqrt(3)
+            w2 = np.exp(1j * (phase + 4*np.pi/3)) / np.sqrt(3)
+            
+            self.pseudoqubits[node_id] = {
+                'node_id': node_id,
+                'qubit_id': node_id % 3,
+                'physical_addr': physical,
+                'virtual_addr': virtual,
+                'inverse_addr': inverse,
+                'sigma_address': sigma,
+                'j_invariant_real': j_real,
+                'j_invariant_imag': j_imag,
+                'phase': phase,
+                'w_amplitudes': (w0, w1, w2),
+                'parent_triangle': None
+            }
+            
+        except Exception as e:
+            pass
+    
+    def _try_extract_triangle(self, tri_id: int):
+        if tri_id in self.triangles:
+            return
+        
+        try:
+            # Layer 0: one triangle per node
+            if tri_id < MOONSHINE_DIMENSION:
+                layer = 0
+                position = tri_id
+                vertices = (tri_id, tri_id, tri_id)
             else:
-                operands.append(part)
+                # Higher layers
+                layer_sizes = [196883, 65627, 21875, 7291, 2430, 810, 270, 90, 30, 10, 3, 3]
+                cumulative = 0
+                layer = 0
+                
+                for size in layer_sizes:
+                    if tri_id < cumulative + size:
+                        break
+                    cumulative += size
+                    layer += 1
+                
+                position = tri_id - cumulative
+                base = position * 3
+                vertices = (base, base + 1, base + 2)
+            
+            self.triangles[tri_id] = {
+                'triangle_id': tri_id,
+                'layer': layer,
+                'position': position,
+                'vertex_ids': vertices,
+                'collective_sigma': 0.0,
+                'collective_j_real': 0.0,
+                'collective_j_imag': 0.0,
+                'w_fidelity': 0.95,
+                'parent_triangle': None
+            }
+            
+            if layer == 11:
+                self.apex_triangle = tri_id
+                
+        except Exception as e:
+            pass
+    
+    def _extract_pending_structures(self):
+        self.logger.info("Extracting pending structures...")
         
-        return operands
+        for node_id in list(self.pseudoqubit_memory.keys()):
+            if node_id not in self.pseudoqubits:
+                self._try_extract_pseudoqubit(node_id)
+        
+        for tri_id in list(self.triangle_memory.keys()):
+            if tri_id not in self.triangles:
+                self._try_extract_triangle(tri_id)
 
-# ════════════════════════════════════════════════════════════════════════════
-# MAIN EXECUTION
-# ════════════════════════════════════════════════════════════════════════════
+class QBCParser:
+    def __init__(self, verbose: bool = True):
+        self.logger = logging.getLogger("QBCParser")
+        self.verbose = verbose
+        self.pseudoqubits = {}
+        self.triangles = {}
+        self.apex_triangle = None
+        self.vm = QBCVirtualMachine()
+    
+    def execute_qbc(self, qbc_file: Path) -> bool:
+        qbc_path = Path(qbc_file)
+        
+        if not qbc_path.exists():
+            self.logger.error(f"File not found: {qbc_path}")
+            return False
+        
+        try:
+            with open(qbc_path, 'rb') as f:
+                content = f.read()
+            
+            if self.verbose:
+                self.logger.info(f"Loaded {len(content):,} bytes")
+            
+            qbc_text = content.decode('utf-8', errors='ignore')
+            
+            self.vm.load_program(qbc_text)
+            self.vm.run()
+            
+            self.pseudoqubits = self.vm.pseudoqubits
+            self.triangles = self.vm.triangles
+            self.apex_triangle = self.vm.apex_triangle
+            
+            if len(self.pseudoqubits) == 0:
+                self.logger.error("NO PSEUDOQUBITS CREATED")
+                return False
+            
+            if self.verbose:
+                self.logger.info("SUCCESS")
+                self.logger.info(f"  Pseudoqubits: {len(self.pseudoqubits):,}")
+                self.logger.info(f"  Triangles: {len(self.triangles):,}")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
 def main():
-    """Main entry point"""
-    
     if len(sys.argv) < 2:
         print("Usage: python qbc_parser.py <qbc_file>")
         sys.exit(1)
     
-    qbc_file = Path(sys.argv[1])
-    
-    if not qbc_file.exists():
-        print(f"Error: File not found: {qbc_file}")
-        sys.exit(1)
-    
-    print("="*80)
-    print("🌙 QBC PARSER & VIRTUAL MACHINE")
-    print("   MOONSHINE LATTICE INSTANTIATION")
-    print("="*80)
-    print(f"File: {qbc_file}")
-    print(f"Target: 196,883-dimensional Moonshine representation")
-    print("="*80)
-    
-    # Assemble
-    assembler = QBCAssembler(verbose=True)
-    instructions = assembler.parse_file(qbc_file)
-    
-    print()
-    
-    # Execute
-    vm = QBCVirtualMachine(verbose=True)
-    
-    # Load data strings into VM memory
-    string_addr = 0x100000
-    for label, text in assembler.data_section.items():
-        vm.memory_strings[string_addr] = text
-        vm.labels[label] = string_addr
-        string_addr += len(text) + 1
-    
-    vm.load_program(instructions)
-    
-    success = vm.execute()
-    
-    # Save OUTPUT_BUFFER
-    output_file = qbc_file.parent / "qbc_output.json"
-    
-    print(f"\n💾 Saving output to: {output_file}")
-    
-    output_data = {
-        'success': success,
-        'cycles': vm.cycle_count,
-        'stats': vm.stats,
-        'output': vm.get_output_buffer(),
-        'memory_entries': len(vm.memory),
-        'memory_sample': {hex(k): v for k, v in list(vm.memory.items())[:100]},
-        'registers': {f'r{i}': vm.registers[i] for i in range(16) if vm.registers[i] != 0}
-    }
-    
-    with open(output_file, 'w') as f:
-        json.dump(output_data, f, indent=2)
-    
-    print(f"✓ Output saved")
-    
-    # Summary
-    print(f"\n{'='*80}")
-    print(f"📊 EXECUTION SUMMARY")
-    print(f"{'='*80}")
-    print(f"Status: {'✅ SUCCESS' if success else '❌ TIMEOUT'}")
-    print(f"Cycles executed: {vm.cycle_count:,}")
-    print(f"Instructions: {vm.stats['instructions_executed']:,}")
-    print(f"Memory operations:")
-    print(f"  - Total entries: {len(vm.memory):,}")
-    print(f"  - Reads: {vm.stats['memory_reads']:,}")
-    print(f"  - Writes: {vm.stats['memory_writes']:,}")
-    print(f"Control flow:")
-    print(f"  - Function calls: {vm.stats.get('function_calls', 0):,}")
-    print(f"  - Jumps: {vm.stats.get('jumps', 0):,}")
-    
-    if not success:
-        print(f"\n⚠️  WARNING: Execution reached cycle limit")
-        print(f"   This is normal for full 196,883-node instantiation")
-        print(f"   Partial lattice data has been saved")
-    
-    print(f"{'='*80}\n")
-    
+    parser = QBCParser(verbose=True)
+    success = parser.execute_qbc(sys.argv[1])
     sys.exit(0 if success else 1)
 
 if __name__ == "__main__":

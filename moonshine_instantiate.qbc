@@ -1,0 +1,536 @@
+; ═══════════════════════════════════════════════════════════════════════════
+; MOONSHINE QUANTUM INTERNET - LEAN VERSION
+; ═══════════════════════════════════════════════════════════════════════════
+;
+; SIMPLIFIED FLOW:
+; 1. Create 196,883 pseudoqubits
+; 2. Create 196,883 virtual qubits
+; 3. Create 196,883 inverse-virtual qubits
+; 4. Create 196,883 base W-triangles (pq, v, iv)
+; 5. Mark first, middle, last
+; 6. Output routing table
+; 7. HALT - Let server/client build hierarchy
+;
+; ═══════════════════════════════════════════════════════════════════════════
+
+.define MOONSHINE_DIMENSION         196883
+.define SIGMA_PERIOD               8.0
+.define PI                         3.14159265358979323846
+.define TWO_PI                     6.28318530717958647692
+
+.define PSEUDOQUBIT_BASE           0x0000000100000000
+.define VIRTUAL_BASE               0x0000000200000000
+.define INVERSE_VIRTUAL_BASE       0x0000000300000000
+.define TRIANGLE_BASE              0x0000000400000000
+.define ROUTING_TABLE              0x0000000800000000
+
+.define PSEUDOQUBIT_SIZE           512
+.define VIRTUAL_SIZE               256
+.define TRIANGLE_SIZE              256
+
+.entry_point moonshine_main
+
+moonshine_main:
+    ; Create all base structures
+    QCALL create_pseudoqubits
+    QCALL create_virtuals
+    QCALL create_inverse_virtuals
+    QCALL create_base_triangles
+    QCALL mark_special_triangles
+    QCALL create_routing_table
+    
+    ; Done! Server takes over
+    QHALT
+
+; ═══════════════════════════════════════════════════════════════════════════
+; CREATE PSEUDOQUBITS
+; ═══════════════════════════════════════════════════════════════════════════
+
+create_pseudoqubits:
+    QPUSH r10, r11
+    QMOV r10, 0
+    
+pq_loop:
+    QJGE r10, MOONSHINE_DIMENSION, pq_done
+    QMOV r0, r10
+    QCALL make_pseudoqubit
+    QADD r10, 1
+    QJMP pq_loop
+    
+pq_done:
+    QPOP r11, r10
+    QRET
+
+make_pseudoqubit:
+    QPUSH r4, r5, r6, r7, r8
+    QMOV r4, r0
+    QMOV r8, PSEUDOQUBIT_BASE
+    QMUL r5, r4, PSEUDOQUBIT_SIZE
+    QADD r8, r5
+    
+    QSTORE r4, r8
+    QADD r8, 8
+    QMOD r5, r4, 3
+    QSTORE r5, r8
+    QADD r8, 8
+    
+    QMOV r6, PSEUDOQUBIT_BASE
+    QMUL r7, r4, PSEUDOQUBIT_SIZE
+    QADD r6, r7
+    QSTORE r6, r8
+    QADD r8, 8
+    
+    QMOV r6, VIRTUAL_BASE
+    QMUL r7, r4, VIRTUAL_SIZE
+    QADD r6, r7
+    QSTORE r6, r8
+    QADD r8, 8
+    
+    QMOV r6, INVERSE_VIRTUAL_BASE
+    QMUL r7, r4, VIRTUAL_SIZE
+    QADD r6, r7
+    QSTORE r6, r8
+    QADD r8, 8
+    
+    QMOV r0, r4
+    QCALL compute_j
+    QSTORE r0, r8
+    QADD r8, 8
+    QSTORE r1, r8
+    QADD r8, 8
+    
+    QMOV r0, r4
+    QCALL compute_sigma
+    QSTORE r0, r8
+    QADD r8, 8
+    
+    QMOV r0, r4
+    QCALL compute_phase
+    QSTORE r0, r8
+    QADD r8, 8
+    
+    QMOV r0, r4
+    QCALL compute_w
+    QSTORE r0, r8
+    QADD r8, 8
+    QSTORE r1, r8
+    QADD r8, 8
+    QSTORE r2, r8
+    QADD r8, 8
+    QSTORE r3, r8
+    QADD r8, 8
+    QSTORE r4, r8
+    QADD r8, 8
+    QSTORE r5, r8
+    QADD r8, 8
+    
+    QMOV r6, 0
+    QSTORE r6, r8
+    QADD r8, 8
+    QMOV r6, 0xFFFFFFFFFFFFFFFF
+    QSTORE r6, r8
+    
+    QPOP r8, r7, r6, r5, r4
+    QRET
+
+; ═══════════════════════════════════════════════════════════════════════════
+; CREATE VIRTUAL QUBITS
+; ═══════════════════════════════════════════════════════════════════════════
+
+create_virtuals:
+    QPUSH r10, r11
+    QMOV r10, 0
+    
+virt_loop:
+    QJGE r10, MOONSHINE_DIMENSION, virt_done
+    QMOV r0, r10
+    QCALL make_virtual
+    QADD r10, 1
+    QJMP virt_loop
+    
+virt_done:
+    QPOP r11, r10
+    QRET
+
+make_virtual:
+    QPUSH r4, r5, r8
+    QMOV r4, r0
+    QMOV r8, VIRTUAL_BASE
+    QMUL r5, r4, VIRTUAL_SIZE
+    QADD r8, r5
+    
+    QSTORE r4, r8
+    QADD r8, 8
+    QMOV r0, r4
+    QCALL compute_j
+    QSTORE r0, r8
+    QADD r8, 8
+    QSTORE r1, r8
+    QADD r8, 8
+    QMOV r0, r4
+    QCALL compute_sigma
+    QSTORE r0, r8
+    QADD r8, 8
+    QMOV r0, r4
+    QCALL compute_phase
+    QADD r0, PI
+    QSTORE r0, r8
+    
+    QPOP r8, r5, r4
+    QRET
+
+; ═══════════════════════════════════════════════════════════════════════════
+; CREATE INVERSE-VIRTUAL QUBITS
+; ═══════════════════════════════════════════════════════════════════════════
+
+create_inverse_virtuals:
+    QPUSH r10, r11
+    QMOV r10, 0
+    
+inv_loop:
+    QJGE r10, MOONSHINE_DIMENSION, inv_done
+    QMOV r0, r10
+    QCALL make_inverse_virtual
+    QADD r10, 1
+    QJMP inv_loop
+    
+inv_done:
+    QPOP r11, r10
+    QRET
+
+make_inverse_virtual:
+    QPUSH r4, r5, r6, r8
+    QMOV r4, r0
+    QMOV r5, MOONSHINE_DIMENSION
+    QSUB r5, r4
+    QSUB r5, 1
+    
+    QMOV r8, INVERSE_VIRTUAL_BASE
+    QMUL r6, r4, VIRTUAL_SIZE
+    QADD r8, r6
+    
+    QSTORE r5, r8
+    QADD r8, 8
+    QMOV r0, r4
+    QCALL compute_j
+    QNEG r0
+    QSTORE r0, r8
+    QADD r8, 8
+    QNEG r1
+    QSTORE r1, r8
+    QADD r8, 8
+    
+    QMOV r0, SIGMA_PERIOD
+    QMOV r1, r4
+    QCALL compute_sigma
+    QSUB r0, r1
+    QSTORE r0, r8
+    
+    QPOP r8, r6, r5, r4
+    QRET
+
+; ═══════════════════════════════════════════════════════════════════════════
+; CREATE BASE TRIANGLES
+; ═══════════════════════════════════════════════════════════════════════════
+
+create_base_triangles:
+    QPUSH r10, r11
+    QMOV r10, 0
+    
+tri_loop:
+    QJGE r10, MOONSHINE_DIMENSION, tri_done
+    
+    QMOV r0, r10
+    QMOV r1, r10
+    QMOV r2, r10
+    QMOV r3, r10
+    QMOV r4, 0
+    QMOV r5, r10
+    
+    QCALL make_triangle
+    
+    QADD r10, 1
+    QJMP tri_loop
+    
+tri_done:
+    QPOP r11, r10
+    QRET
+
+make_triangle:
+    QPUSH r6, r7, r8, r9
+    
+    QMOV r8, TRIANGLE_BASE
+    QMUL r9, r3, TRIANGLE_SIZE
+    QADD r8, r9
+    
+    QSTORE r3, r8
+    QADD r8, 8
+    QSTORE r4, r8
+    QADD r8, 8
+    QSTORE r5, r8
+    QADD r8, 8
+    QSTORE r0, r8
+    QADD r8, 8
+    QSTORE r1, r8
+    QADD r8, 8
+    QSTORE r2, r8
+    QADD r8, 8
+    
+    QMOV r6, r0
+    QCALL compute_j
+    QSTORE r0, r8
+    QADD r8, 8
+    QSTORE r1, r8
+    QADD r8, 8
+    
+    QMOV r0, r6
+    QCALL compute_sigma
+    QSTORE r0, r8
+    QADD r8, 8
+    
+    QMOV r7, 95
+    QSTORE r7, r8
+    QADD r8, 8
+    
+    QMOV r7, 0xFFFFFFFFFFFFFFFF
+    QSTORE r7, r8
+    QADD r8, 8
+    
+    QMOV r7, 0
+    QSTORE r7, r8
+    
+    QMOV r0, r6
+    QCALL set_pq_parent
+    
+    QPOP r9, r8, r7, r6
+    QRET
+
+set_pq_parent:
+    QPUSH r5, r8
+    QMOV r8, PSEUDOQUBIT_BASE
+    QMUL r5, r0, PSEUDOQUBIT_SIZE
+    QADD r8, r5
+    QADD r8, 128
+    QSTORE r3, r8
+    QSUB r8, 8
+    QMOV r5, 2
+    QSTORE r5, r8
+    QPOP r8, r5
+    QRET
+
+; ═══════════════════════════════════════════════════════════════════════════
+; MARK SPECIAL TRIANGLES
+; ═══════════════════════════════════════════════════════════════════════════
+
+mark_special_triangles:
+    QPUSH r10, r11
+    
+    ; First
+    QMOV r0, 0
+    QMOV r1, 1
+    QCALL mark_special
+    
+    ; Middle
+    QMOV r10, MOONSHINE_DIMENSION
+    QDIV r10, 2
+    QMOV r0, r10
+    QMOV r1, 2
+    QCALL mark_special
+    
+    ; Last
+    QMOV r10, MOONSHINE_DIMENSION
+    QSUB r10, 1
+    QMOV r0, r10
+    QMOV r1, 3
+    QCALL mark_special
+    
+    QPOP r11, r10
+    QRET
+
+mark_special:
+    QPUSH r5, r8
+    QMOV r4, r0
+    QMOV r8, TRIANGLE_BASE
+    QMUL r5, r4, TRIANGLE_SIZE
+    QADD r8, r5
+    QADD r8, 88
+    QSTORE r1, r8
+    QPOP r8, r5
+    QRET
+
+; ═══════════════════════════════════════════════════════════════════════════
+; CREATE ROUTING TABLE
+; ═══════════════════════════════════════════════════════════════════════════
+
+create_routing_table:
+    ; Create routing table entries for all nodes
+    QPUSH r10, r11
+    
+    QMOV r10, 0
+    
+route_loop:
+    QJGE r10, MOONSHINE_DIMENSION, route_done
+    
+    QMOV r0, r10
+    QCALL make_route_entry
+    
+    QADD r10, 1
+    QJMP route_loop
+    
+route_done:
+    QPOP r11, r10
+    QRET
+
+make_route_entry:
+    ; Create routing table entry
+    ; Format: node_id, pq_addr, v_addr, iv_addr, j_real, j_imag, sigma
+    
+    QPUSH r4, r5, r6, r8
+    
+    QMOV r4, r0
+    
+    QMOV r8, ROUTING_TABLE
+    QMUL r5, r4, 128
+    QADD r8, r5
+    
+    QSTORE r4, r8
+    QADD r8, 8
+    
+    QMOV r5, PSEUDOQUBIT_BASE
+    QMUL r6, r4, PSEUDOQUBIT_SIZE
+    QADD r5, r6
+    QSTORE r5, r8
+    QADD r8, 8
+    
+    QMOV r5, VIRTUAL_BASE
+    QMUL r6, r4, VIRTUAL_SIZE
+    QADD r5, r6
+    QSTORE r5, r8
+    QADD r8, 8
+    
+    QMOV r5, INVERSE_VIRTUAL_BASE
+    QMUL r6, r4, VIRTUAL_SIZE
+    QADD r5, r6
+    QSTORE r5, r8
+    QADD r8, 8
+    
+    QMOV r0, r4
+    QCALL compute_j
+    QSTORE r0, r8
+    QADD r8, 8
+    QSTORE r1, r8
+    QADD r8, 8
+    
+    QMOV r0, r4
+    QCALL compute_sigma
+    QSTORE r0, r8
+    
+    QPOP r8, r6, r5, r4
+    QRET
+
+; ═══════════════════════════════════════════════════════════════════════════
+; MATH FUNCTIONS
+; ═══════════════════════════════════════════════════════════════════════════
+
+compute_j:
+    QPUSH r2, r3
+    QMUL r2, r0, TWO_PI
+    QDIV r2, MOONSHINE_DIMENSION
+    QMOV r0, r2
+    QCALL math_cos
+    QMUL r0, 1728
+    QMOV r3, r0
+    QMOV r0, r2
+    QCALL math_sin
+    QMUL r0, 1728
+    QMOV r1, r0
+    QMOV r0, r3
+    QPOP r3, r2
+    QRET
+
+compute_sigma:
+    QPUSH r2
+    QMUL r2, r0, SIGMA_PERIOD
+    QDIV r2, MOONSHINE_DIMENSION
+    QMOV r0, r2
+    QPOP r2
+    QRET
+
+compute_phase:
+    QPUSH r2
+    QMUL r2, r0, TWO_PI
+    QDIV r2, MOONSHINE_DIMENSION
+    QMOD r2, TWO_PI
+    QMOV r0, r2
+    QPOP r2
+    QRET
+
+compute_w:
+    QPUSH r6, r7, r8
+    QMOV r8, r0
+    QCALL compute_phase
+    QMOV r6, r0
+    QMOV r0, r6
+    QCALL math_cos
+    QMUL r0, 0.57735026918962576451
+    QMOV r7, r0
+    QMOV r0, r6
+    QCALL math_sin
+    QMUL r0, 0.57735026918962576451
+    QMOV r1, r0
+    QMOV r0, r7
+    QADD r6, 2.0943951023931954923
+    QMOV r7, r6
+    QCALL math_cos
+    QMUL r0, 0.57735026918962576451
+    QMOV r2, r0
+    QMOV r0, r7
+    QCALL math_sin
+    QMUL r0, 0.57735026918962576451
+    QMOV r3, r0
+    QADD r6, 2.0943951023931954923
+    QMOV r7, r6
+    QCALL math_cos
+    QMUL r0, 0.57735026918962576451
+    QMOV r4, r0
+    QMOV r0, r7
+    QCALL math_sin
+    QMUL r0, 0.57735026918962576451
+    QMOV r5, r0
+    QMOV r0, r8
+    QCALL compute_phase
+    QCALL math_cos
+    QMUL r0, 0.57735026918962576451
+    QPOP r8, r7, r6
+    QRET
+
+math_cos:
+    QPUSH r2, r3
+    QMOD r0, TWO_PI
+    QMOV r2, r0
+    QMUL r2, r2
+    QMOV r3, 1
+    QMOV r4, r2
+    QDIV r4, 2
+    QSUB r3, r4
+    QMUL r4, r2
+    QDIV r4, 24
+    QADD r3, r4
+    QMOV r0, r3
+    QPOP r3, r2
+    QRET
+
+math_sin:
+    QPUSH r2, r3
+    QMOD r0, TWO_PI
+    QMOV r2, r0
+    QMOV r3, r0
+    QMUL r2, r0
+    QMUL r2, r0
+    QDIV r2, 6
+    QSUB r3, r2
+    QMOV r0, r3
+    QPOP r3, r2
+    QRET
+
+.end
