@@ -680,28 +680,36 @@ class HierarchicalMoonshineLattice:
         
         # Insert pseudoqubits
         logger.info("Inserting pseudoqubits...")
+        logger.info(f"  Preparing {len(self.pseudoqubits):,} qubit records...")
         qubit_data = [
             (pq.id, pq.sigma, pq.j_invariant.real, pq.j_invariant.imag,
              pq.qubit_type, pq.triangle_id, pq.layer, pq.get_routing_address())
             for pq in self.pseudoqubits.values()
         ]
+        logger.info(f"  Inserting {len(qubit_data):,} qubits (this takes ~2s)...")
         cursor.executemany(
             "INSERT INTO pseudoqubits VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             qubit_data
         )
+        conn.commit()
+        logger.info(f"  ✓ {len(qubit_data):,} pseudoqubits committed")
         
         # Insert triangles
         logger.info("Inserting triangles...")
+        logger.info(f"  Preparing {len(self.triangles):,} triangle records...")
         triangle_data = [
             (tri.id, tri.layer, tri.physical.id, tri.virtual.id,
              tri.inverse_virtual.id, tri.parent_id, tri.centroid_sigma,
              tri.get_routing_address())
             for tri in self.triangles.values()
         ]
+        logger.info(f"  Inserting {len(triangle_data):,} triangles (this takes ~1s)...")
         cursor.executemany(
             "INSERT INTO triangles VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             triangle_data
         )
+        conn.commit()
+        logger.info(f"  ✓ {len(triangle_data):,} triangles committed")
         
         # Insert hierarchy
         logger.info("Inserting hierarchy relationships...")

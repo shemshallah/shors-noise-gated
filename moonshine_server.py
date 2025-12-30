@@ -1246,12 +1246,19 @@ def api_ionq_connect():
 
 @app.route('/health')
 def health():
-    """Health check"""
+    """
+    Health check endpoint for Render.
+    
+    ALWAYS returns 200 OK immediately - Render will restart the service
+    if this endpoint returns non-200 or takes too long to respond.
+    The lattice builds in the background while health checks pass.
+    """
     return jsonify({
-        'status': 'healthy' if STATE.lattice_ready else 'initializing',
+        'status': 'healthy',
         'uptime': time.time() - STATE.start_time,
-        'version': VERSION
-    })
+        'version': VERSION,
+        'lattice_ready': STATE.lattice_ready
+    }), 200
 
 # ============================================================================
 # MAIN
