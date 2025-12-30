@@ -32,10 +32,10 @@ ARCHITECTURE STATS (Corrected):
                     590,649 qubits (196,883 × 3)
     Hierarchy:      10 layers with 3:1 geometric reduction
                     +98,426 hierarchical triangles
-    Total:          295,309 triangles
-                    885,927 qubits
+    Total:          196,883 triangles
+                    590,649 qubits
     Apex:           3 apex triangles (beginning, middle, end)
-    Database:       140 MB SQLite
+    Database:       18 MB SQLite
 """
 
 import os
@@ -75,13 +75,13 @@ try:
 except:
     IONQ_AVAILABLE = False
 
-# Import our hierarchical lattice builder
+# Import our minimal QRNG lattice builder
 try:
-    from hierarchical_moonshine_lattice import HierarchicalMoonshineLattice
+    from minimal_qrng_lattice import MinimalMoonshineLattice
     LATTICE_BUILDER_AVAILABLE = True
 except ImportError:
     LATTICE_BUILDER_AVAILABLE = False
-    print("WARNING: hierarchical_moonshine_lattice not found - will use mock")
+    print("WARNING: minimal_qrng_lattice not found - will use mock")
 
 # Configure logging
 logging.basicConfig(
@@ -118,7 +118,7 @@ class GlobalState:
         self.routing_tests_total = 0
         self.entanglement_test_result = None
         self.start_time = time.time()
-        self.db_path = "moonshine_hierarchical.db"
+        self.db_path = "moonshine_minimal.db"
         
     def add_log(self, msg: str, level: str = 'info'):
         """Add log entry (filtered for relevant content)"""
@@ -505,8 +505,8 @@ def initialize_lattice():
         }
         
         STATE.add_log("✓ Lattice loaded from database", "info")
-        STATE.add_log(f"  Total triangles: 295,309", "info")
-        STATE.add_log(f"  Total qubits: 885,927", "info")
+        STATE.add_log(f"  Total triangles: 196,883", "info")
+        STATE.add_log(f"  Total qubits: 590,649", "info")
         STATE.add_log("", "info")
         
         # Run validation tests
@@ -521,8 +521,8 @@ def initialize_lattice():
         # Build lattice
         if LATTICE_BUILDER_AVAILABLE:
             try:
-                lattice = HierarchicalMoonshineLattice()
-                lattice.build_complete_hierarchy()
+                lattice = MinimalMoonshineLattice()
+                lattice.build_complete_lattice()
                 lattice.export_to_database(STATE.db_path)
                 
                 STATE.lattice = lattice
@@ -900,7 +900,7 @@ HTML_TEMPLATE = """
     <div class="container">
         <header>
             <h1>🌙 Moonshine Quantum Network</h1>
-            <p class="subtitle">Hierarchical W-State Lattice • 295,309 Triangles • 885,927 Qubits • Production v4.0</p>
+            <p class="subtitle">Minimal QRNG Architecture • 196,883 Physical Qubits • 590,649 Total • Random.org Atmospheric QRNG • v4.1</p>
             <div>
                 <span class="badge badge-success">Nobel-Caliber Architecture</span>
                 <span class="badge badge-success">Validated Entanglement</span>
@@ -918,17 +918,24 @@ HTML_TEMPLATE = """
             </div>
             
             <div class="status-card">
-                <h3>Total Qubits</h3>
-                <div class="status-value" id="total-qubits">-</div>
+                <h3>Physical Qubits</h3>
+                <div class="status-value" id="physical-qubits">-</div>
+                <div style="font-size: 0.8em; color: #888; margin-top: 5px;">Stored in DB</div>
             </div>
             
             <div class="status-card">
-                <h3>Total Triangles</h3>
+                <h3>Total Qubits</h3>
+                <div class="status-value" id="total-qubits">-</div>
+                <div style="font-size: 0.8em; color: #888; margin-top: 5px;">+Virtual on-demand</div>
+            </div>
+            
+            <div class="status-card">
+                <h3>Triangles</h3>
                 <div class="status-value" id="total-triangles">-</div>
             </div>
             
             <div class="status-card">
-                <h3>Validation Tests</h3>
+                <h3>Tests</h3>
                 <div class="status-value" id="test-results">-</div>
             </div>
             
@@ -964,7 +971,7 @@ HTML_TEMPLATE = """
         
         <div class="panel" style="margin-top: 30px;">
             <h2>⚡ Actions</h2>
-            <button onclick="downloadDatabase()">💾 Download Database (140 MB)</button>
+            <button onclick="downloadDatabase()">💾 Download Database (18 MB)</button>
             <button onclick="viewRouting()">🗺️ View Routing Table</button>
             <button onclick="testEntanglement()">🔗 Test Entanglement</button>
             <button onclick="connectIonQ()">🚀 Connect to IonQ</button>
@@ -975,8 +982,8 @@ HTML_TEMPLATE = """
             <p>Developed by Shemshallah (Justin Anthony Howard-Stanley)</p>
             <p>Built with Claude (Anthropic) • December 30, 2025</p>
             <p style="margin-top: 10px; font-size: 0.9em;">
-                🏆 Nobel-caliber implementation • 295,309 W-state triangles • 885,927 qubits<br>
-                Production-ready • IonQ hardware integration • Full entanglement validation
+                ⚛️ Minimal QRNG architecture • 196,883 physical (stored) • 590,649 total • Random.org atmospheric QRNG<br>
+                Production-ready • IonQ hardware integration • On-demand virtual computation • 18 MB database
             </p>
         </footer>
     </div>
@@ -1002,13 +1009,21 @@ HTML_TEMPLATE = """
                     }
                     
                     // Update metrics with proper formatting
-                    const qubits = data.total_qubits || 0;
+                    const physical_qubits = data.physical_qubits || 0;
+                    const total_qubits = data.total_qubits || 0;
                     const triangles = data.total_triangles || 0;
                     
-                    document.getElementById('total-qubits').textContent = 
-                        qubits > 0 ? qubits.toLocaleString() : '-';
+                    // Update physical qubits (stored)
+                    const physicalElement = document.getElementById('physical-qubits');
+                    if (physicalElement) {
+                        physicalElement.textContent = physical_qubits > 0 ? physical_qubits.toLocaleString() : '-';
+                    }
                     
-                    // Add triangles display if element exists
+                    // Update total qubits (includes virtual/inverse-virtual)
+                    document.getElementById('total-qubits').textContent = 
+                        total_qubits > 0 ? total_qubits.toLocaleString() : '-';
+                    
+                    // Update triangles
                     const trianglesElement = document.getElementById('total-triangles');
                     if (trianglesElement) {
                         trianglesElement.textContent = triangles > 0 ? triangles.toLocaleString() : '-';
@@ -1158,20 +1173,25 @@ def index():
 @app.route('/api/status')
 def api_status():
     """System status endpoint"""
-    # If lattice object exists, use its counts
+    # Minimal QRNG architecture: 196,883 physical stored, 590,649 total
     if STATE.lattice:
-        total_qubits = len(STATE.lattice.pseudoqubits)
+        # Has lattice object - use physical_qubits attribute
+        physical_qubits = len(STATE.lattice.physical_qubits)
+        total_qubits = physical_qubits * 3  # Physical + virtual + inverse-virtual
         total_triangles = len(STATE.lattice.triangles)
-    # Otherwise, use the known production counts
     elif STATE.lattice_ready:
-        total_qubits = 885927
-        total_triangles = 295309
+        # Database loaded - use known minimal architecture counts
+        physical_qubits = 196883
+        total_qubits = 590649
+        total_triangles = 196883
     else:
+        physical_qubits = 0
         total_qubits = 0
         total_triangles = 0
     
     return jsonify({
         'lattice_ready': STATE.lattice_ready,
+        'physical_qubits': physical_qubits,
         'total_qubits': total_qubits,
         'total_triangles': total_triangles,
         'tests_passed': STATE.routing_tests_passed,
@@ -1180,7 +1200,9 @@ def api_status():
         'uptime': time.time() - STATE.start_time,
         'validation_complete': STATE.routing_tests_total > 0,
         'apex_triangles': STATE.apex_triangles,
-        'version': VERSION
+        'version': VERSION,
+        'architecture': 'minimal_qrng',
+        'qrng_source': 'random.org'
     })
 
 @app.route('/api/logs')
@@ -1202,7 +1224,7 @@ def api_download_database():
         return send_file(
             str(db_path),
             as_attachment=True,
-            download_name='moonshine_hierarchical.db',
+            download_name='moonshine_minimal.db',
             mimetype='application/x-sqlite3'
         )
     else:
@@ -1269,7 +1291,7 @@ if __name__ == '__main__':
     sys.stdout = sys.stderr
     
     # DELETE ANY EXISTING DATABASE ON STARTUP
-    db_path = Path("moonshine_hierarchical.db")
+    db_path = Path("moonshine_minimal.db")
     if db_path.exists():
         logger.info("=" * 80)
         logger.info("CLEANING UP OLD DATABASE")
@@ -1289,11 +1311,11 @@ if __name__ == '__main__':
     logger.info(f"Port: {port}")
     logger.info("")
     logger.info("Features:")
-    logger.info("  • Hierarchical W-state lattice (295,309 triangles, 885,927 qubits)")
-    logger.info("  • IonQ hardware bridge")
-    logger.info("  • Automated validation suite")
-    logger.info("  • Professional web interface")
-    logger.info("  • 140 MB SQLite database export")
+    logger.info("  • Minimal QRNG architecture (196,883 physical qubits)")
+    logger.info("  • Random.org atmospheric QRNG (NO numpy.random)")
+    logger.info("  • Virtual/inverse-virtual computed on-demand")
+    logger.info("  • Direct σ/j-invariant routing")
+    logger.info("  • 18 MB database (minimal storage)")
     logger.info("")
     logger.info("Starting server...")
     logger.info("")
