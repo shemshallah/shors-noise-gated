@@ -1447,40 +1447,7 @@ if __name__ == '__main__':
     print("   2. Use the web UI button, OR")
     print(f"   3. Run: curl -X POST http://localhost:{port}/api/qft/trigger")
     print()
-    print("🤝 Collaboration: shemshallah@protonmail.com")
-    print("💰 BTC: bc1qtdnh3ch535rc3c8thlsns34h6xvjvn6sjx8ed0")
-    print()
-    
-    # Start background init
-    threading.Thread(target=initialize_backend, daemon=True).start()
-    
-    # Start Flask (this blocks)
-    app.run(host='0.0.0.0', port=port, debug
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# MAIN - START SERVER
-# ════════════════════════════════════════════════════════════════════════════
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 7860))
-    
-    print("="*80)
-    print("🌙 MOONSHINE QUANTUM INTERNET - PRODUCTION SERVER v3.5")
-    print("="*80)
-    print(f"Version: {VERSION}")
-    print(f"Build: {BUILD_DATE}")
-    print()
-    print(f"Starting Flask server on 0.0.0.0:{port}...")
-    print("Web interface will be available immediately")
-    print("Backend initialization will run in background")
-    print()
-    print("📍 To trigger QFT:")
-    print("   1. Wait for 'Ready for World Record QFT' message")
-    print("   2. Use the web UI button, OR")
-    print(f"   3. Run: curl -X POST http://localhost:{port}/api/qft/trigger")
-    print()
-    print("🤝 Collaboration: shemshallah@protonmail.com")
+    print("🤝 Collaboration: shemshallah@gmail.com")
     print("💰 BTC: bc1qtdnh3ch535rc3c8thlsns34h6xvjvn6sjx8ed0")
     print()
     
