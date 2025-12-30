@@ -121,7 +121,27 @@ class GlobalState:
         self.db_path = "moonshine_hierarchical.db"
         
     def add_log(self, msg: str, level: str = 'info'):
-        """Add log entry"""
+        """Add log entry (filtered for relevant content)"""
+        # Skip Flask server messages and HTTP requests
+        skip_patterns = [
+            'Serving Flask app',
+            'Debug mode',
+            'WARNING: This is a development server',
+            'Running on http',
+            'Running on all addresses',
+            'Press CTRL+C',
+            'GET /',
+            'POST /',
+            'HTTP/1.1',
+            '127.0.0.1',
+            'ANSI'
+        ]
+        
+        # Check if we should skip this message
+        for pattern in skip_patterns:
+            if pattern in msg:
+                return  # Don't log it
+        
         timestamp = time.strftime('%H:%M:%S')
         self.logs.append({
             'time': timestamp,
@@ -903,6 +923,11 @@ HTML_TEMPLATE = """
             </div>
             
             <div class="status-card">
+                <h3>Total Triangles</h3>
+                <div class="status-value" id="total-triangles">-</div>
+            </div>
+            
+            <div class="status-card">
                 <h3>Validation Tests</h3>
                 <div class="status-value" id="test-results">-</div>
             </div>
@@ -976,9 +1001,19 @@ HTML_TEMPLATE = """
                         statusText.textContent = 'INITIALIZING';
                     }
                     
-                    // Update metrics
+                    // Update metrics with proper formatting
+                    const qubits = data.total_qubits || 0;
+                    const triangles = data.total_triangles || 0;
+                    
                     document.getElementById('total-qubits').textContent = 
-                        data.total_qubits ? data.total_qubits.toLocaleString() : '-';
+                        qubits > 0 ? qubits.toLocaleString() : '-';
+                    
+                    // Add triangles display if element exists
+                    const trianglesElement = document.getElementById('total-triangles');
+                    if (trianglesElement) {
+                        trianglesElement.textContent = triangles > 0 ? triangles.toLocaleString() : '-';
+                    }
+                    
                     document.getElementById('test-results').textContent = 
                         `${data.tests_passed}/${data.tests_total}`;
                     document.getElementById('uptime').textContent = 
@@ -1225,6 +1260,17 @@ def health():
 if __name__ == '__main__':
     # Force stdout to stderr for Render visibility
     sys.stdout = sys.stderr
+    
+    # DELETE ANY EXISTING DATABASE ON STARTUP
+    db_path = Path("moonshine_hierarchical.db")
+    if db_path.exists():
+        logger.info("=" * 80)
+        logger.info("CLEANING UP OLD DATABASE")
+        logger.info("=" * 80)
+        logger.info(f"Deleting existing database: {db_path}")
+        db_path.unlink()
+        logger.info("✓ Old database removed")
+        logger.info("")
     
     port = int(os.environ.get('PORT', 10000))
     

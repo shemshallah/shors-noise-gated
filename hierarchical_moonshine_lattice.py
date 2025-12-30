@@ -528,9 +528,15 @@ class HierarchicalMoonshineLattice:
         
         # Build hierarchical layers - stop when we have 3-30 triangles
         current_layer = 0
-        while len(self.layers[current_layer]) > 30:
+        max_layers = 15  # Safety limit
+        while len(self.layers[current_layer]) > 30 and current_layer < max_layers:
             self.build_hierarchical_layer(current_layer, reduction_factor=3)
             current_layer += 1
+            
+            # Safety check
+            if current_layer not in self.layers:
+                logger.warning(f"Layer {current_layer} not created - stopping hierarchy build")
+                break
         
         # If we have exactly 3, they become the apex directly
         if len(self.layers[current_layer]) == 3:
