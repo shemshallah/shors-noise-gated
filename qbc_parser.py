@@ -9,6 +9,15 @@ from pathlib import Path
 from typing import Dict, Optional
 import numpy as np
 
+# Force all output to stdout immediately
+import functools
+original_print = print
+def flushed_print(*args, **kwargs):
+    original_print(*args, **kwargs)
+    sys.stdout.flush()
+    sys.stderr.flush()
+print = flushed_print
+
 MOONSHINE_DIMENSION = 196883
 SIGMA_PERIOD = 8.0
 PSEUDOQUBIT_TABLE = 0x0000000100000000

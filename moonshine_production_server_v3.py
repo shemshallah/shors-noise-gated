@@ -145,7 +145,10 @@ class GlobalState:
             'level': level,
             'msg': msg
         })
-        print(f"[{timestamp}] [{level.upper()}] {msg}")
+        log_msg = f"[{timestamp}] [{level.upper()}] {msg}"
+        print(log_msg)
+        sys.stdout.flush()
+        sys.stderr.flush()
 
 STATE = GlobalState()
 
@@ -528,6 +531,11 @@ ORACLE = None
 def initialize_backend():
     """Initialize routing table and oracle in background"""
     global ORACLE
+    
+    print("\n" + "!"*80, flush=True)
+    print("! BACKGROUND INITIALIZATION STARTING", flush=True)
+    print("!"*80 + "\n", flush=True)
+    sys.stdout.flush()
     
     STATE.add_log("", "info")
     STATE.add_log("="*80, "info")
@@ -1385,6 +1393,14 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
 # 
 
 if __name__ == '__main__':
+    # FORCE ALL OUTPUT IMMEDIATELY
+    import sys
+    sys.stdout = sys.stderr  # Route everything to stderr for Render visibility
+    
+    print("="*80, flush=True)
+    print("STARTUP: Moonshine Quantum Server initializing...", flush=True)
+    print("="*80, flush=True)
+    
     port = int(os.environ.get('PORT', 7860))
     
     print("="*80)
@@ -1394,9 +1410,11 @@ if __name__ == '__main__':
     print(f"Build: {BUILD_DATE}")
     print(f"Platform: Mobile development in tent")
     print()
+    print(f"PORT: {port}")
     print(f"Starting Flask server on 0.0.0.0:{port}...")
     print("Web interface will be available immediately")
     print("Backend initialization will run in background")
+    sys.stdout.flush()
     print()
     print(" To trigger QFT:")
     print("   1. Wait for 'Ready for World Record QFT' message")
