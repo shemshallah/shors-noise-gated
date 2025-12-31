@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """
 MOONSHINE FLASK SERVER
@@ -6,7 +7,6 @@ Routes all logs to web interface with real-time streaming
 """
 
 from flask import Flask, render_template, jsonify, request, Response
-from flask_cors import CORS
 import json
 import time
 import threading
@@ -99,7 +99,6 @@ logger = logging.getLogger("MoonshineServer")
 # ═════════════════════════════════════════════════════════════════════════
 
 app = Flask(__name__)
-CORS(app)
 
 # Global state
 server_state = {
