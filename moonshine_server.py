@@ -1,966 +1,824 @@
 #!/usr/bin/env python3
 """
-MOONSHINE QUANTUM EXPERIMENTS SERVER - COMPLETE
-================================================
-
-Full production server with:
-- Lattice loading/building (minimal_qrng_lattice)
-- World Record QFT with live streaming
-- Quantum Advantage Demo with real-time logs
-- Entanglement Preservation Tests
-- Professional HTML interface with buttons
-- Real-time SSE log streaming
-
-Author: Shemshallah && Claude
-Date: December 30, 2025
+MOONSHINE FLASK SERVER
+Complete web server with HTML terminal, QBC parser, and experiment runner
+Routes all logs to web interface with real-time streaming
 """
 
-import os
-import sys
-import time
+from flask import Flask, render_template, jsonify, request, Response
+from flask_cors import CORS
 import json
-import logging
+import time
 import threading
-import numpy as np
-import queue
+import logging
+import sys
 import io
-import sqlite3
 from pathlib import Path
-from typing import Dict, List, Optional
-from collections import deque
 from datetime import datetime
+from queue import Queue, Empty
+import traceback
 
-# Force unbuffered output
-sys.stdout.reconfigure(line_buffering=True)
-sys.stderr.reconfigure(line_buffering=True)
+# Import local modules
+from qbc_parser import QBCParser
+from experiment_runner import ExperimentRunner
+from moonshine_core import create_core as create_quantum_core
 
-# Flask
-from flask import Flask, jsonify, render_template_string, request, Response
+# ═════════════════════════════════════════════════════════════════════════
+# LOGGING SETUP - CAPTURE ALL OUTPUT
+# ═════════════════════════════════════════════════════════════════════════
 
-# Quantum computing
-try:
-    from qiskit import QuantumCircuit, transpile
-    from qiskit_aer import AerSimulator
-    QISKIT_AVAILABLE = True
-except ImportError:
-    QISKIT_AVAILABLE = False
-    print("WARNING: Qiskit not available")
+class LogCapture:
+    """Captures all log output and routes to web terminal"""
+    
+    def __init__(self):
+        self.log_queue = Queue()
+        self.subscribers = []
+        
+    def write(self, message):
+        """Capture stdout/stderr"""
+        if message.strip():
+            self.emit({
+                'timestamp': datetime.now().isoformat(),
+                'level': 'INFO',
+                'message': message.strip(),
+                'source': 'system'
+            })
+    
+    def flush(self):
+        pass
+    
+    def emit(self, log_entry):
+        """Emit log entry to queue and subscribers"""
+        self.log_queue.put(log_entry)
+        
+        # Send to all SSE subscribers
+        dead_subscribers = []
+        for sub in self.subscribers:
+            try:
+                sub.put(log_entry)
+            except:
+                dead_subscribers.append(sub)
+        
+        # Clean up dead subscribers
+        for sub in dead_subscribers:
+            self.subscribers.remove(sub)
+    
+    def subscribe(self):
+        """Subscribe to log stream"""
+        queue = Queue()
+        self.subscribers.append(queue)
+        return queue
 
-# Import modules
-try:
-    from minimal_qrng_lattice import MinimalMoonshineLattice
-    LATTICE_BUILDER_AVAILABLE = True
-except ImportError:
-    LATTICE_BUILDER_AVAILABLE = False
-    print("WARNING: minimal_qrng_lattice not available")
+# Create global log capture
+log_capture = LogCapture()
 
-try:
-    from world_record_qft import GeometricQuantumFourierTransform
-    from moonshine_core import MoonshineLattice
-    WORLD_RECORD_QFT_AVAILABLE = True
-except ImportError:
-    WORLD_RECORD_QFT_AVAILABLE = False
-    print("INFO: world_record_qft not available - using simplified version")
+# Redirect stdout/stderr
+sys.stdout = log_capture
+sys.stderr = log_capture
 
-try:
-    from quantum_advantage_demo import run_demo as run_advantage_demo
-    ADVANTAGE_DEMO_AVAILABLE = True
-except ImportError:
-    ADVANTAGE_DEMO_AVAILABLE = False
-    print("INFO: quantum_advantage_demo not available - using simplified version")
+# Setup logging to use our capture
+class QueueHandler(logging.Handler):
+    def emit(self, record):
+        log_capture.emit({
+            'timestamp': datetime.fromtimestamp(record.created).isoformat(),
+            'level': record.levelname,
+            'message': self.format(record),
+            'source': record.name
+        })
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    datefmt='%H:%M:%S',
-    stream=sys.stdout,
-    force=True
+    handlers=[QueueHandler()],
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
 )
-logger = logging.getLogger(__name__)
 
-# ============================================================================
-# CONSTANTS
-# ============================================================================
+logger = logging.getLogger("MoonshineServer")
 
-VERSION = "1.0.0-complete"
-BUILD_DATE = "2025-12-30"
-MOONSHINE_DIMENSION = 196883
-
-# ============================================================================
-# GLOBAL STATE
-# ============================================================================
-
-class GlobalState:
-    def __init__(self):
-        self.logs = deque(maxlen=1000)
-        self.lattice_ready = False
-        self.lattice_loading = False
-        self.db_path = "moonshine_minimal.db"
-        self.experiments_run = 0
-        self.start_time = time.time()
-        
-    def add_log(self, msg: str, level: str = 'info'):
-        skip_patterns = ['Serving Flask', 'Debug mode', 'Running on', 'GET /', 'POST /', 'HTTP/1.1', '127.0.0.1']
-        for pattern in skip_patterns:
-            if pattern in msg:
-                return
-        
-        timestamp = time.strftime('%H:%M:%S')
-        self.logs.append({'time': timestamp, 'level': level.upper(), 'msg': msg})
-        log_func = getattr(logger, level.lower(), logger.info)
-        log_func(msg)
-    
-    def get_uptime(self) -> str:
-        uptime_seconds = int(time.time() - self.start_time)
-        hours = uptime_seconds // 3600
-        minutes = (uptime_seconds % 3600) // 60
-        seconds = uptime_seconds % 60
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
-STATE = GlobalState()
-
-# ============================================================================
-# QUANTUM VALIDATOR
-# ============================================================================
-
-class QuantumValidator:
-    def __init__(self):
-        if QISKIT_AVAILABLE:
-            self.aer_simulator = AerSimulator(method='statevector')
-        else:
-            self.aer_simulator = None
-    
-    def create_w_state_circuit(self):
-        if not QISKIT_AVAILABLE:
-            return None
-        
-        qc = QuantumCircuit(3, 3)
-        theta = 2 * np.arcsin(1 / np.sqrt(3))
-        qc.ry(theta, 0)
-        qc.ch(0, 1)
-        qc.x(0)
-        qc.ccx(0, 1, 2)
-        qc.x(0)
-        return qc
-    
-    def measure_w_state_fidelity(self, circuit: QuantumCircuit, shots: int = 8192) -> float:
-        if not QISKIT_AVAILABLE or self.aer_simulator is None:
-            return 0.0
-        
-        qc = circuit.copy()
-        qc.measure([0, 1, 2], [0, 1, 2])
-        
-        transpiled = transpile(qc, self.aer_simulator)
-        result = self.aer_simulator.run(transpiled, shots=shots).result()
-        counts = result.get_counts()
-        
-        w_basis = ['100', '010', '001']
-        w_count = sum(counts.get(basis, 0) for basis in w_basis)
-        fidelity = w_count / shots
-        
-        return fidelity
-
-validator = QuantumValidator()
-
-# ============================================================================
-# LATTICE MANAGEMENT
-# ============================================================================
-
-def load_or_build_lattice():
-    """Load lattice from database or build new one"""
-    
-    STATE.lattice_loading = True
-    STATE.add_log("Starting lattice initialization...")
-    
-    try:
-        if Path(STATE.db_path).exists():
-            STATE.add_log(f"Found existing lattice: {STATE.db_path}")
-            
-            # Verify database
-            conn = sqlite3.connect(STATE.db_path)
-            cursor = conn.cursor()
-            
-            try:
-                metadata = dict(cursor.execute("SELECT key, value FROM metadata").fetchall())
-                physical_qubits = metadata.get('physical_qubits', 'unknown')
-                STATE.add_log(f"Lattice contains {physical_qubits} physical qubits")
-                STATE.lattice_ready = True
-                conn.close()
-                STATE.add_log("✓ Lattice loaded successfully")
-                return True
-                
-            except Exception as e:
-                STATE.add_log(f"Database verification failed: {e}", 'error')
-                conn.close()
-        
-        # Build new lattice
-        if not LATTICE_BUILDER_AVAILABLE:
-            STATE.add_log("Cannot build lattice - minimal_qrng_lattice not available", 'error')
-            STATE.lattice_loading = False
-            return False
-        
-        STATE.add_log("Building new Moonshine lattice...")
-        STATE.add_log("This will take ~3-4 seconds...")
-        
-        lattice = MinimalMoonshineLattice()
-        lattice.build_complete_lattice()
-        lattice.export_to_database(STATE.db_path)
-        
-        STATE.lattice_ready = True
-        STATE.add_log("✓ Lattice built and saved successfully")
-        return True
-        
-    except Exception as e:
-        STATE.add_log(f"Lattice initialization failed: {e}", 'error')
-        STATE.lattice_ready = False
-        return False
-    finally:
-        STATE.lattice_loading = False
-
-# ============================================================================
-# EXPERIMENT STREAMING FUNCTIONS
-# ============================================================================
-
-def stream_world_record_qft(n_qubits: Optional[int] = None):
-    """Stream World Record QFT experiment"""
-    
-    yield f"data: {json.dumps({'type': 'connected', 'message': 'Starting World Record QFT...'})}\n\n"
-    
-    result_container = {'result': None, 'done': False}
-    output_lines = queue.Queue()
-    
-    def run_experiment():
-        try:
-            old_stdout = sys.stdout
-            output_buffer = io.StringIO()
-            sys.stdout = output_buffer
-            
-            print("="*80)
-            print("WORLD RECORD QFT - GEOMETRIC IMPLEMENTATION")
-            print("="*80)
-            print()
-            
-            if WORLD_RECORD_QFT_AVAILABLE:
-                print(f"Loading lattice from {STATE.db_path}...")
-                lattice = MoonshineLattice()
-                
-                if lattice.load_from_database(STATE.db_path):
-                    print(f"✓ Lattice loaded: {len(lattice.pseudoqubits):,} qubits")
-                    print()
-                    
-                    qft = GeometricQuantumFourierTransform(lattice)
-                    n = n_qubits or 16
-                    
-                    print(f"Running geometric QFT with {n:,} qubits...")
-                    print()
-                    
-                    result = qft.run_geometric_qft(max_qubits=n)
-                    
-                    print(f"✓ QFT complete!")
-                    print(f"  Algorithm: {result.algorithm}")
-                    print(f"  Qubits used: {result.qubits_used:,}")
-                    print(f"  Speedup: {result.speedup_factor}x")
-                    print(f"  Time: {result.execution_time:.4f}s")
-                    print()
-                    
-                    result_container['result'] = {
-                        'success': True,
-                        'algorithm': result.algorithm,
-                        'qubits': result.qubits_used,
-                        'speedup': result.speedup_factor if result.speedup_factor != float('inf') else 'infinite',
-                        'execution_time': result.execution_time,
-                        'routing_proofs': len(result.routing_proofs)
-                    }
-                else:
-                    raise Exception("Failed to load lattice")
-            else:
-                # Simplified demo
-                print("Note: Full implementation requires world_record_qft.py")
-                print()
-                n = n_qubits or 16
-                print(f"Running simplified QFT with {n} qubits...")
-                time.sleep(0.5)
-                print(f"  ✓ {n} qubits in superposition")
-                time.sleep(0.3)
-                print(f"  ✓ Applying phase rotations...")
-                time.sleep(0.3)
-                print(f"  ✓ QFT complete!")
-                print()
-                
-                speedup = round((n * np.log2(n)) / (n**2), 2) if n > 1 else 1.0
-                print(f"Theoretical speedup: {speedup}x over classical FFT")
-                print("="*80)
-                
-                result_container['result'] = {
-                    'success': True,
-                    'algorithm': 'Simplified QFT Demo',
-                    'qubits': n,
-                    'speedup': speedup,
-                    'execution_time': 0.9
-                }
-            
-            sys.stdout = old_stdout
-            output = output_buffer.getvalue()
-            
-            for line in output.split('\n'):
-                if line.strip():
-                    output_lines.put(line)
-                    
-        except Exception as e:
-            sys.stdout = old_stdout
-            output_lines.put(f"ERROR: {e}")
-            result_container['result'] = {'success': False, 'error': str(e)}
-        finally:
-            result_container['done'] = True
-    
-    thread = threading.Thread(target=run_experiment, daemon=True)
-    thread.start()
-    
-    last_heartbeat = time.time()
-    
-    while not result_container['done'] or not output_lines.empty():
-        try:
-            line = output_lines.get(timeout=0.2)
-            yield f"data: {json.dumps({'type': 'output', 'data': line})}\n\n"
-        except queue.Empty:
-            if time.time() - last_heartbeat > 2.0:
-                yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
-                last_heartbeat = time.time()
-    
-    thread.join(timeout=1.0)
-    
-    if result_container['result']:
-        if result_container['result'].get('success'):
-            yield f"data: {json.dumps({'type': 'result', 'data': result_container['result']})}\n\n"
-        yield f"data: {json.dumps({'type': 'done', 'success': result_container['result'].get('success', False)})}\n\n"
-
-
-def stream_quantum_advantage():
-    """Stream Quantum Advantage demo"""
-    
-    yield f"data: {json.dumps({'type': 'connected', 'message': 'Starting Quantum Advantage Demo...'})}\n\n"
-    
-    result_container = {'result': None, 'done': False}
-    output_lines = queue.Queue()
-    
-    def run_experiment():
-        try:
-            old_stdout = sys.stdout
-            output_buffer = io.StringIO()
-            sys.stdout = output_buffer
-            
-            print("="*80)
-            print("QUANTUM ADVANTAGE DEMONSTRATION")
-            print("="*80)
-            print()
-            
-            if ADVANTAGE_DEMO_AVAILABLE:
-                print("Running full advantage demo suite...")
-                print()
-                
-                results = run_advantage_demo(
-                    database=STATE.db_path,
-                    export=None,
-                    validate=False
-                )
-                
-                print()
-                print(f"✓ Completed {len(results)} algorithm tests")
-                print()
-                
-                result_container['result'] = {
-                    'success': True,
-                    'tests_run': len(results),
-                    'tests_passed': sum(1 for r in results if r.success),
-                    'total_qubits': sum(r.qubits_used for r in results),
-                    'results': [
-                        {
-                            'algorithm': r.algorithm,
-                            'qubits': r.qubits_used,
-                            'speedup': r.speedup_factor if r.speedup_factor != float('inf') else 'infinite',
-                            'time': r.execution_time
-                        }
-                        for r in results
-                    ]
-                }
-                
-            else:
-                # Simplified demo
-                print("Note: Full implementation requires quantum_advantage_demo.py")
-                print()
-                
-                algorithms = [
-                    ('Deutsch-Jozsa', 16, 32769, 'Exponential speedup'),
-                    ("Grover's Search", 16, 256, 'Quadratic speedup'),
-                    ('Shor Factoring', 8, 128, 'Exponential speedup'),
-                ]
-                
-                results = []
-                for name, qubits, speedup, desc in algorithms:
-                    print(f"Running {name}...")
-                    time.sleep(0.4)
-                    print(f"  ✓ {qubits} qubits")
-                    print(f"  ✓ Speedup: {speedup}x")
-                    print(f"  ✓ {desc}")
-                    print()
-                    
-                    results.append({
-                        'algorithm': name,
-                        'qubits': qubits,
-                        'speedup': speedup,
-                        'time': 0.1
-                    })
-                
-                print("="*80)
-                print("QUANTUM ADVANTAGE DEMONSTRATED")
-                print("="*80)
-                
-                result_container['result'] = {
-                    'success': True,
-                    'tests_run': len(results),
-                    'tests_passed': len(results),
-                    'total_qubits': sum(r['qubits'] for r in results),
-                    'results': results
-                }
-            
-            sys.stdout = old_stdout
-            output = output_buffer.getvalue()
-            
-            for line in output.split('\n'):
-                if line.strip():
-                    output_lines.put(line)
-                    
-        except Exception as e:
-            sys.stdout = old_stdout
-            output_lines.put(f"ERROR: {e}")
-            result_container['result'] = {'success': False, 'error': str(e)}
-        finally:
-            result_container['done'] = True
-    
-    thread = threading.Thread(target=run_experiment, daemon=True)
-    thread.start()
-    
-    last_heartbeat = time.time()
-    
-    while not result_container['done'] or not output_lines.empty():
-        try:
-            line = output_lines.get(timeout=0.2)
-            yield f"data: {json.dumps({'type': 'output', 'data': line})}\n\n"
-        except queue.Empty:
-            if time.time() - last_heartbeat > 2.0:
-                yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
-                last_heartbeat = time.time()
-    
-    thread.join(timeout=1.0)
-    
-    if result_container['result']:
-        if result_container['result'].get('success'):
-            yield f"data: {json.dumps({'type': 'result', 'data': result_container['result']})}\n\n"
-        yield f"data: {json.dumps({'type': 'done', 'success': result_container['result'].get('success', False)})}\n\n"
-
-
-def stream_entanglement_test():
-    """Stream entanglement preservation test"""
-    
-    yield f"data: {json.dumps({'type': 'connected', 'message': 'Starting entanglement test...'})}\n\n"
-    
-    result_container = {'result': None, 'done': False}
-    output_lines = queue.Queue()
-    
-    def run_experiment():
-        try:
-            old_stdout = sys.stdout
-            output_buffer = io.StringIO()
-            sys.stdout = output_buffer
-            
-            print("="*80)
-            print("ENTANGLEMENT PRESERVATION TEST")
-            print("="*80)
-            print()
-            print("Backend: Aer Simulator")
-            print()
-            
-            print("Creating W-state circuit...")
-            qc = validator.create_w_state_circuit()
-            
-            if qc is None:
-                raise Exception("Qiskit not available")
-            
-            print("✓ W-state circuit created")
-            print()
-            
-            print("Measuring fidelity...")
-            fidelity = validator.measure_w_state_fidelity(qc, shots=8192)
-            
-            print(f"✓ Fidelity: {fidelity:.6f}")
-            print()
-            
-            print("Testing Bell inequality...")
-            # Simplified Bell test
-            bell_S = 2.5
-            bell_violation = bell_S > 2.0
-            
-            print(f"✓ CHSH parameter S: {bell_S:.4f}")
-            print(f"  Classical limit: 2.0000")
-            print(f"  Violation: {'YES' if bell_violation else 'NO'}")
-            print()
-            
-            print("="*80)
-            print("TEST COMPLETE")
-            print("="*80)
-            
-            result_container['result'] = {
-                'success': True,
-                'fidelity': fidelity,
-                'bell_test': {
-                    'S': bell_S,
-                    'classical_limit': 2.0,
-                    'violation': bell_violation
-                },
-                'backend': 'aer'
-            }
-            
-            sys.stdout = old_stdout
-            output = output_buffer.getvalue()
-            
-            for line in output.split('\n'):
-                if line.strip():
-                    output_lines.put(line)
-                    
-        except Exception as e:
-            sys.stdout = old_stdout
-            output_lines.put(f"ERROR: {e}")
-            result_container['result'] = {'success': False, 'error': str(e)}
-        finally:
-            result_container['done'] = True
-    
-    thread = threading.Thread(target=run_experiment, daemon=True)
-    thread.start()
-    
-    last_heartbeat = time.time()
-    
-    while not result_container['done'] or not output_lines.empty():
-        try:
-            line = output_lines.get(timeout=0.2)
-            yield f"data: {json.dumps({'type': 'output', 'data': line})}\n\n"
-        except queue.Empty:
-            if time.time() - last_heartbeat > 2.0:
-                yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
-                last_heartbeat = time.time()
-    
-    thread.join(timeout=1.0)
-    
-    if result_container['result']:
-        if result_container['result'].get('success'):
-            yield f"data: {json.dumps({'type': 'result', 'data': result_container['result']})}\n\n"
-        yield f"data: {json.dumps({'type': 'done', 'success': result_container['result'].get('success', False)})}\n\n"
-
-# ============================================================================
-# FLASK APPLICATION
-# ============================================================================
+# ═════════════════════════════════════════════════════════════════════════
+# FLASK APP
+# ═════════════════════════════════════════════════════════════════════════
 
 app = Flask(__name__)
+CORS(app)
 
-# HTML Interface
-HTML_TEMPLATE = """
+# Global state
+server_state = {
+    'qbc_parsed': False,
+    'lattice_loaded': False,
+    'quantum_core_running': False,
+    'experiments': {},
+    'qbc_parser': None,
+    'quantum_core': None,
+    'experiment_runner': None
+}
+
+# ═════════════════════════════════════════════════════════════════════════
+# HTML TERMINAL
+# ═════════════════════════════════════════════════════════════════════════
+
+HTML_TERMINAL = """
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Moonshine Quantum Experiments</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Moonshine Quantum Terminal</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
         body {
             font-family: 'Courier New', monospace;
             background: #0a0a0a;
             color: #00ff00;
-            padding: 20px;
+            overflow: hidden;
         }
+        
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        
         .header {
-            text-align: center;
+            background: linear-gradient(135deg, #1a1a2e 0%, #0f0f1e 100%);
             padding: 20px;
             border-bottom: 2px solid #00ff00;
-            margin-bottom: 20px;
+            box-shadow: 0 4px 20px rgba(0, 255, 0, 0.3);
         }
-        h1 { font-size: 24px; margin-bottom: 10px; }
-        .status { font-size: 14px; color: #888; }
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            display: grid;
-            grid-template-columns: 300px 1fr;
+        
+        .header h1 {
+            font-size: 24px;
+            text-shadow: 0 0 10px #00ff00;
+            letter-spacing: 2px;
+        }
+        
+        .status-bar {
+            display: flex;
             gap: 20px;
-        }
-        .sidebar {
-            border: 1px solid #00ff00;
-            padding: 20px;
-            height: fit-content;
-        }
-        .button {
-            width: 100%;
-            padding: 15px;
-            margin: 10px 0;
-            background: #000;
-            color: #00ff00;
-            border: 2px solid #00ff00;
-            cursor: pointer;
-            font-family: inherit;
-            font-size: 14px;
-            transition: all 0.3s;
-        }
-        .button:hover { background: #00ff00; color: #000; }
-        .button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            background: #222;
-        }
-        .status-indicator {
-            padding: 10px;
-            margin: 10px 0;
-            border: 1px solid #555;
+            margin-top: 10px;
             font-size: 12px;
         }
-        .status-indicator.ready { border-color: #00ff00; color: #00ff00; }
-        .status-indicator.loading { border-color: #ffff00; color: #ffff00; }
-        .status-indicator.error { border-color: #ff0000; color: #ff0000; }
-        .logs {
-            border: 1px solid #00ff00;
-            padding: 20px;
-            height: 600px;
-            overflow-y: auto;
-            background: #000;
+        
+        .status-item {
+            padding: 5px 10px;
+            background: rgba(0, 255, 0, 0.1);
+            border-radius: 3px;
+            border: 1px solid rgba(0, 255, 0, 0.3);
         }
-        .log-line {
+        
+        .status-active {
+            background: rgba(0, 255, 0, 0.3);
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .controls {
+            background: #1a1a1a;
+            padding: 15px 20px;
+            border-bottom: 1px solid #333;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            background: #00ff00;
+            color: #000;
+            border: none;
+            padding: 8px 16px;
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 3px;
+            transition: all 0.3s;
+        }
+        
+        button:hover {
+            background: #00cc00;
+            box-shadow: 0 0 10px #00ff00;
+        }
+        
+        button:disabled {
+            background: #333;
+            color: #666;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+        
+        .terminal {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background: #000;
             font-size: 13px;
             line-height: 1.6;
-            padding: 2px 0;
-            white-space: pre-wrap;
-            word-wrap: break-word;
         }
-        .log-time { color: #666; }
-        .log-info { color: #00ff00; }
-        .log-error { color: #ff0000; }
-        .log-warning { color: #ffff00; }
-        .result-box {
-            margin-top: 20px;
-            padding: 15px;
-            border: 2px solid #00ff00;
-            background: #001100;
+        
+        .log-entry {
+            margin: 2px 0;
+            padding: 4px 8px;
+            border-left: 3px solid transparent;
+            animation: fadeIn 0.3s;
         }
-        .result-title { font-size: 16px; margin-bottom: 10px; font-weight: bold; }
-        .result-data { font-size: 13px; line-height: 1.8; }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateX(-10px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+        
+        .log-INFO { 
+            color: #00ff00; 
+            border-left-color: #00ff00;
+        }
+        
+        .log-SUCCESS { 
+            color: #00ffff; 
+            border-left-color: #00ffff;
+            font-weight: bold;
+        }
+        
+        .log-WARNING { 
+            color: #ffaa00; 
+            border-left-color: #ffaa00;
+        }
+        
+        .log-ERROR { 
+            color: #ff0000; 
+            border-left-color: #ff0000;
+            font-weight: bold;
+        }
+        
+        .log-PROGRESS {
+            color: #ff00ff;
+            border-left-color: #ff00ff;
+        }
+        
+        .log-METRIC {
+            color: #ffff00;
+            border-left-color: #ffff00;
+        }
+        
+        .log-DATA {
+            color: #00aaff;
+            border-left-color: #00aaff;
+        }
+        
+        .timestamp {
+            color: #666;
+            margin-right: 10px;
+        }
+        
+        .source {
+            color: #888;
+            margin-right: 10px;
+            font-weight: bold;
+        }
+        
+        .progress-bar {
+            width: 200px;
+            height: 4px;
+            background: #333;
+            border-radius: 2px;
+            overflow: hidden;
+            display: inline-block;
+            vertical-align: middle;
+            margin-left: 10px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: #00ff00;
+            transition: width 0.3s;
+        }
+        
+        pre {
+            margin: 5px 0;
+            padding: 10px;
+            background: #1a1a1a;
+            border-radius: 3px;
+            overflow-x: auto;
+        }
+        
+        .metric {
+            display: inline-block;
+            background: rgba(255, 255, 0, 0.1);
+            padding: 2px 8px;
+            border-radius: 3px;
+            margin: 0 5px;
+        }
+        
+        .experiment-select {
+            background: #1a1a1a;
+            color: #00ff00;
+            border: 1px solid #00ff00;
+            padding: 8px 16px;
+            font-family: 'Courier New', monospace;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>🚀 MOONSHINE QUANTUM EXPERIMENTS 🚀</h1>
-        <div class="status">v1.0 | Uptime: <span id="uptime">00:00:00</span></div>
-    </div>
-
     <div class="container">
-        <div class="sidebar">
-            <h2 style="margin-bottom: 20px;">Controls</h2>
-            
-            <div id="lattice-status" class="status-indicator">
-                Lattice: Not Loaded
-            </div>
-            
-            <button id="load-lattice" class="button">
-                Load/Build Lattice
-            </button>
-            
-            <hr style="margin: 20px 0; border-color: #333;">
-            
-            <button id="run-qft" class="button" disabled>
-                World Record QFT
-            </button>
-            
-            <button id="run-advantage" class="button" disabled>
-                Quantum Advantage
-            </button>
-            
-            <button id="run-entanglement" class="button" disabled>
-                Entanglement Test
-            </button>
-            
-            <hr style="margin: 20px 0; border-color: #333;">
-            
-            <button id="clear-logs" class="button">
-                Clear Logs
-            </button>
-            
-            <div class="status-indicator" style="margin-top: 20px;">
-                <div>Experiments Run: <span id="exp-count">0</span></div>
-                <div style="margin-top: 5px; font-size: 11px; color: #666;">
-                    Status: <span id="status-text">Ready</span>
-                </div>
+        <div class="header">
+            <h1>🌌 MOONSHINE QUANTUM TERMINAL</h1>
+            <div class="status-bar">
+                <div class="status-item" id="status-server">Server: <span id="server-status">Connecting...</span></div>
+                <div class="status-item" id="status-qbc">QBC: <span id="qbc-status">Not Parsed</span></div>
+                <div class="status-item" id="status-lattice">Lattice: <span id="lattice-status">Not Loaded</span></div>
+                <div class="status-item" id="status-core">Core: <span id="core-status">Stopped</span></div>
             </div>
         </div>
-
-        <div class="logs">
-            <div id="log-output"></div>
-            <div id="result-area"></div>
+        
+        <div class="controls">
+            <button id="btn-parse-qbc" onclick="parseQBC()">Parse QBC</button>
+            <button id="btn-load-lattice" onclick="loadLattice()" disabled>Load Lattice</button>
+            <button id="btn-start-core" onclick="startCore()" disabled>Start Quantum Core</button>
+            <button id="btn-stop-core" onclick="stopCore()" disabled>Stop Core</button>
+            
+            <select class="experiment-select" id="experiment-select">
+                <option value="">-- Select Experiment --</option>
+            </select>
+            <button id="btn-run-experiment" onclick="runExperiment()" disabled>Run Experiment</button>
+            
+            <button onclick="clearTerminal()">Clear Terminal</button>
         </div>
+        
+        <div class="terminal" id="terminal"></div>
     </div>
-
+    
     <script>
-        let experimentRunning = false;
-        let latticeReady = false;
-
-        // Update status periodically
-        setInterval(async () => {
-            const resp = await fetch('/api/status');
-            const data = await resp.json();
-            document.getElementById('uptime').textContent = data.uptime;
-            document.getElementById('exp-count').textContent = data.experiments_run;
-            latticeReady = data.lattice_ready;
+        const terminal = document.getElementById('terminal');
+        let eventSource = null;
+        let logCount = 0;
+        const MAX_LOGS = 1000;
+        
+        // Connect to log stream
+        function connectLogStream() {
+            eventSource = new EventSource('/api/logs/stream');
             
-            // Update lattice status
-            const latticeStatus = document.getElementById('lattice-status');
-            if (data.lattice_ready) {
-                latticeStatus.className = 'status-indicator ready';
-                latticeStatus.textContent = '✓ Lattice: Ready';
-                document.getElementById('run-qft').disabled = experimentRunning;
-                document.getElementById('run-advantage').disabled = experimentRunning;
-                document.getElementById('run-entanglement').disabled = experimentRunning;
-            } else if (data.lattice_loading) {
-                latticeStatus.className = 'status-indicator loading';
-                latticeStatus.textContent = '⌛ Lattice: Loading...';
-            } else {
-                latticeStatus.className = 'status-indicator';
-                latticeStatus.textContent = '✗ Lattice: Not Loaded';
+            eventSource.onmessage = function(event) {
+                const log = JSON.parse(event.data);
+                appendLog(log);
+            };
+            
+            eventSource.onerror = function() {
+                updateStatus('server-status', 'Disconnected', false);
+                setTimeout(connectLogStream, 5000);
+            };
+            
+            updateStatus('server-status', 'Connected', true);
+        }
+        
+        function appendLog(log) {
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${log.level}`;
+            
+            let html = `<span class="timestamp">${new Date(log.timestamp).toLocaleTimeString()}</span>`;
+            
+            if (log.source) {
+                html += `<span class="source">[${log.source}]</span>`;
             }
-        }, 1000);
-
-        // Load lattice
-        document.getElementById('load-lattice').addEventListener('click', async () => {
-            if (experimentRunning) return;
             
-            document.getElementById('status-text').textContent = 'Loading lattice...';
-            addLog('User requested lattice load/build');
+            html += `<span class="message">${escapeHtml(log.message)}</span>`;
+            
+            if (log.progress !== undefined) {
+                html += `<div class="progress-bar"><div class="progress-fill" style="width: ${log.progress}%"></div></div> ${log.progress.toFixed(1)}%`;
+            }
+            
+            if (log.metric_name && log.metric_value !== undefined) {
+                html += `<span class="metric">${log.metric_name}: ${log.metric_value}${log.metric_unit || ''}</span>`;
+            }
+            
+            entry.innerHTML = html;
+            terminal.appendChild(entry);
+            
+            if (log.data) {
+                const pre = document.createElement('pre');
+                pre.textContent = JSON.stringify(log.data, null, 2);
+                terminal.appendChild(pre);
+            }
+            
+            if (log.error) {
+                const pre = document.createElement('pre');
+                pre.style.color = '#ff0000';
+                pre.textContent = log.error;
+                terminal.appendChild(pre);
+            }
+            
+            // Auto-scroll
+            terminal.scrollTop = terminal.scrollHeight;
+            
+            // Limit log count
+            logCount++;
+            if (logCount > MAX_LOGS) {
+                terminal.removeChild(terminal.firstChild);
+                logCount--;
+            }
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        function updateStatus(elementId, text, active) {
+            const span = document.getElementById(elementId);
+            span.textContent = text;
+            const parent = span.parentElement;
+            if (active) {
+                parent.classList.add('status-active');
+            } else {
+                parent.classList.remove('status-active');
+            }
+        }
+        
+        async function parseQBC() {
+            const btn = document.getElementById('btn-parse-qbc');
+            btn.disabled = true;
+            btn.textContent = 'Parsing...';
             
             try {
-                const resp = await fetch('/api/load-lattice', { method: 'POST' });
-                const data = await resp.json();
+                const response = await fetch('/api/parse-qbc', { method: 'POST' });
+                const result = await response.json();
                 
-                if (data.success) {
-                    addLog('✓ Lattice ready!', 'info');
+                if (result.success) {
+                    updateStatus('qbc-status', 'Parsed', true);
+                    document.getElementById('btn-load-lattice').disabled = false;
+                    btn.textContent = 'Parse QBC ✓';
                 } else {
-                    addLog('✗ Lattice load failed: ' + data.error, 'error');
+                    btn.disabled = false;
+                    btn.textContent = 'Parse QBC (Failed)';
                 }
-            } catch (e) {
-                addLog('✗ Error: ' + e, 'error');
+            } catch (error) {
+                btn.disabled = false;
+                btn.textContent = 'Parse QBC (Error)';
             }
+        }
+        
+        async function loadLattice() {
+            const btn = document.getElementById('btn-load-lattice');
+            btn.disabled = true;
+            btn.textContent = 'Loading...';
             
-            document.getElementById('status-text').textContent = 'Ready';
-        });
-
-        // Run experiments
-        document.getElementById('run-qft').addEventListener('click', () => {
-            runExperiment('/api/stream-qft', 'World Record QFT');
-        });
-
-        document.getElementById('run-advantage').addEventListener('click', () => {
-            runExperiment('/api/stream-advantage', 'Quantum Advantage');
-        });
-
-        document.getElementById('run-entanglement').addEventListener('click', () => {
-            runExperiment('/api/stream-entanglement', 'Entanglement Test');
-        });
-
-        // Clear logs
-        document.getElementById('clear-logs').addEventListener('click', () => {
-            document.getElementById('log-output').innerHTML = '';
-            document.getElementById('result-area').innerHTML = '';
-        });
-
-        function runExperiment(endpoint, name) {
-            if (experimentRunning || !latticeReady) return;
-            
-            experimentRunning = true;
-            document.getElementById('status-text').textContent = 'Running ' + name;
-            document.getElementById('result-area').innerHTML = '';
-            
-            // Disable buttons
-            document.getElementById('run-qft').disabled = true;
-            document.getElementById('run-advantage').disabled = true;
-            document.getElementById('run-entanglement').disabled = true;
-            
-            addLog('='.repeat(60), 'info');
-            addLog('Starting: ' + name, 'info');
-            addLog('='.repeat(60), 'info');
-            
-            const eventSource = new EventSource(endpoint);
-            
-            eventSource.addEventListener('message', (e) => {
-                const data = JSON.parse(e.data);
+            try {
+                const response = await fetch('/api/load-lattice', { method: 'POST' });
+                const result = await response.json();
                 
-                if (data.type === 'output') {
-                    addLog(data.data, 'info');
-                } else if (data.type === 'result') {
-                    showResult(name, data.data);
-                } else if (data.type === 'done') {
-                    addLog('='.repeat(60), 'info');
-                    addLog('Experiment complete: ' + (data.success ? 'SUCCESS' : 'FAILED'), data.success ? 'info' : 'error');
-                    addLog('='.repeat(60), 'info');
-                    eventSource.close();
-                    experimentRunning = false;
-                    document.getElementById('status-text').textContent = 'Ready';
-                    
-                    if (latticeReady) {
-                        document.getElementById('run-qft').disabled = false;
-                        document.getElementById('run-advantage').disabled = false;
-                        document.getElementById('run-entanglement').disabled = false;
+                if (result.success) {
+                    updateStatus('lattice-status', 'Loaded', true);
+                    document.getElementById('btn-start-core').disabled = false;
+                    btn.textContent = 'Load Lattice ✓';
+                } else {
+                    btn.disabled = false;
+                    btn.textContent = 'Load Lattice (Failed)';
+                }
+            } catch (error) {
+                btn.disabled = false;
+                btn.textContent = 'Load Lattice (Error)';
+            }
+        }
+        
+        async function startCore() {
+            const btn = document.getElementById('btn-start-core');
+            btn.disabled = true;
+            btn.textContent = 'Starting...';
+            
+            try {
+                const response = await fetch('/api/core/start', { method: 'POST' });
+                const result = await response.json();
+                
+                if (result.success) {
+                    updateStatus('core-status', 'Running', true);
+                    document.getElementById('btn-stop-core').disabled = false;
+                    document.getElementById('btn-run-experiment').disabled = false;
+                    btn.textContent = 'Start Core ✓';
+                } else {
+                    btn.disabled = false;
+                    btn.textContent = 'Start Core (Failed)';
+                }
+            } catch (error) {
+                btn.disabled = false;
+                btn.textContent = 'Start Core (Error)';
+            }
+        }
+        
+        async function stopCore() {
+            const btn = document.getElementById('btn-stop-core');
+            btn.disabled = true;
+            
+            try {
+                const response = await fetch('/api/core/stop', { method: 'POST' });
+                const result = await response.json();
+                
+                updateStatus('core-status', 'Stopped', false);
+                document.getElementById('btn-start-core').disabled = false;
+                document.getElementById('btn-run-experiment').disabled = true;
+                btn.disabled = false;
+            } catch (error) {
+                btn.disabled = false;
+            }
+        }
+        
+        async function runExperiment() {
+            const select = document.getElementById('experiment-select');
+            const experimentName = select.value;
+            
+            if (!experimentName) {
+                alert('Please select an experiment');
+                return;
+            }
+            
+            const btn = document.getElementById('btn-run-experiment');
+            btn.disabled = true;
+            btn.textContent = 'Running...';
+            
+            try {
+                const response = await fetch('/api/experiments/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ experiment: experimentName })
+                });
+                
+                // Logs will stream via SSE
+                btn.textContent = 'Run Experiment';
+                btn.disabled = false;
+            } catch (error) {
+                btn.textContent = 'Run Experiment (Error)';
+                btn.disabled = false;
+            }
+        }
+        
+        function clearTerminal() {
+            terminal.innerHTML = '';
+            logCount = 0;
+        }
+        
+        // Load experiments
+        async function loadExperiments() {
+            try {
+                const response = await fetch('/api/experiments/list');
+                const result = await response.json();
+                
+                const select = document.getElementById('experiment-select');
+                result.experiments.forEach(exp => {
+                    if (exp.implemented) {
+                        const option = document.createElement('option');
+                        option.value = exp.name;
+                        option.textContent = `${exp.name} - ${exp.description}`;
+                        select.appendChild(option);
                     }
-                }
-            });
-            
-            eventSource.onerror = () => {
-                addLog('Connection error', 'error');
-                eventSource.close();
-                experimentRunning = false;
-                document.getElementById('status-text').textContent = 'Ready';
-            };
-        }
-
-        function addLog(message, level = 'info') {
-            const logOutput = document.getElementById('log-output');
-            const line = document.createElement('div');
-            line.className = 'log-line log-' + level;
-            
-            const time = new Date().toLocaleTimeString();
-            line.innerHTML = '<span class="log-time">[' + time + ']</span> ' + escapeHtml(message);
-            
-            logOutput.appendChild(line);
-            logOutput.scrollTop = logOutput.scrollHeight;
-        }
-
-        function showResult(name, data) {
-            const resultArea = document.getElementById('result-area');
-            const box = document.createElement('div');
-            box.className = 'result-box';
-            
-            let html = '<div class="result-title">📊 ' + name + ' Results</div>';
-            html += '<div class="result-data">';
-            
-            if (data.success !== undefined) {
-                html += '✓ Success: ' + data.success + '<br>';
+                });
+            } catch (error) {
+                console.error('Failed to load experiments:', error);
             }
-            
-            for (const [key, value] of Object.entries(data)) {
-                if (key !== 'success') {
-                    html += key + ': ' + JSON.stringify(value, null, 2) + '<br>';
-                }
-            }
-            
-            html += '</div>';
-            box.innerHTML = html;
-            resultArea.appendChild(box);
         }
-
-        function escapeHtml(text) {
-            const map = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'};
-            return text.replace(/[&<>"']/g, m => map[m]);
-        }
-
-        // Initial load
-        addLog('Moonshine Quantum Experiments Server Started', 'info');
-        addLog('Ready for experiments', 'info');
+        
+        // Initialize
+        connectLogStream();
+        loadExperiments();
     </script>
 </body>
 </html>
 """
 
+# ═════════════════════════════════════════════════════════════════════════
+# ROUTES
+# ═════════════════════════════════════════════════════════════════════════
+
 @app.route('/')
 def index():
-    return render_template_string(HTML_TEMPLATE)
+    """Serve HTML terminal"""
+    return HTML_TERMINAL
 
-@app.route('/api/status')
-def status():
-    return jsonify({
-        'version': VERSION,
-        'uptime': STATE.get_uptime(),
-        'lattice_ready': STATE.lattice_ready,
-        'lattice_loading': STATE.lattice_loading,
-        'experiments_run': STATE.experiments_run,
-        'qiskit_available': QISKIT_AVAILABLE
-    })
+@app.route('/api/logs/stream')
+def log_stream():
+    """Server-sent events for log streaming"""
+    def generate():
+        queue = log_capture.subscribe()
+        try:
+            while True:
+                try:
+                    log_entry = queue.get(timeout=30)
+                    yield f"data: {json.dumps(log_entry)}\n\n"
+                except Empty:
+                    # Send keepalive
+                    yield ": keepalive\n\n"
+        except GeneratorExit:
+            log_capture.subscribers.remove(queue)
+    
+    return Response(generate(), mimetype='text/event-stream')
+
+@app.route('/api/parse-qbc', methods=['POST'])
+def parse_qbc():
+    """Parse QBC lattice builder"""
+    try:
+        logger.info("="*80)
+        logger.info("STARTING QBC PARSE")
+        logger.info("="*80)
+        
+        qbc_file = Path('lattice_builder.py')
+        if not qbc_file.exists():
+            logger.error(f"QBC file not found: {qbc_file}")
+            return jsonify({'success': False, 'error': 'QBC file not found'})
+        
+        parser = QBCParser(verbose=True)
+        success = parser.execute_qbc(qbc_file)
+        
+        if success:
+            server_state['qbc_parser'] = parser
+            server_state['qbc_parsed'] = True
+            logger.info("="*80)
+            logger.info("QBC PARSE COMPLETE")
+            logger.info(f"Pseudoqubits: {len(parser.pseudoqubits):,}")
+            logger.info(f"Triangles: {len(parser.triangles):,}")
+            logger.info("="*80)
+        
+        return jsonify({
+            'success': success,
+            'pseudoqubits': len(parser.pseudoqubits) if success else 0,
+            'triangles': len(parser.triangles) if success else 0
+        })
+        
+    except Exception as e:
+        logger.error(f"QBC parse failed: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/load-lattice', methods=['POST'])
-def load_lattice_endpoint():
-    if STATE.lattice_loading:
-        return jsonify({'success': False, 'error': 'Already loading'})
-    
-    def do_load():
-        load_or_build_lattice()
-    
-    thread = threading.Thread(target=do_load, daemon=True)
-    thread.start()
-    
-    return jsonify({'success': True, 'message': 'Loading started'})
+def load_lattice():
+    """Load lattice database"""
+    try:
+        logger.info("="*80)
+        logger.info("LOADING LATTICE DATABASE")
+        logger.info("="*80)
+        
+        db_path = Path('moonshine.db')
+        if not db_path.exists():
+            logger.error("moonshine.db not found")
+            return jsonify({'success': False, 'error': 'Database not found'})
+        
+        # Verify database
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT COUNT(*) FROM coords")
+        node_count = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        server_state['lattice_loaded'] = True
+        logger.info(f"Lattice loaded: {node_count:,} nodes")
+        logger.info("="*80)
+        
+        return jsonify({'success': True, 'nodes': node_count})
+        
+    except Exception as e:
+        logger.error(f"Lattice load failed: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
-@app.route('/api/stream-qft')
-def stream_qft_endpoint():
-    n_qubits = request.args.get('n_qubits', default=None, type=int)
-    STATE.experiments_run += 1
-    return Response(
-        stream_world_record_qft(n_qubits),
-        mimetype='text/event-stream',
-        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'}
-    )
+@app.route('/api/core/start', methods=['POST'])
+def start_core():
+    """Start quantum core"""
+    try:
+        logger.info("="*80)
+        logger.info("STARTING QUANTUM CORE")
+        logger.info("="*80)
+        
+        if server_state['quantum_core'] is None:
+            # Get API key
+            api_key_file = Path('random_org_api.txt')
+            if not api_key_file.exists():
+                logger.warning("random.org API key not found, using fallback")
+                api_key = "DEMO_KEY"
+            else:
+                api_key = api_key_file.read_text().strip()
+            
+            core = create_quantum_core(random_org_api_key=api_key)
+            server_state['quantum_core'] = core
+        
+        server_state['quantum_core'].start()
+        server_state['quantum_core_running'] = True
+        
+        logger.info("Quantum core started")
+        logger.info("="*80)
+        
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        logger.error(f"Core start failed: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
-@app.route('/api/stream-advantage')
-def stream_advantage_endpoint():
-    STATE.experiments_run += 1
-    return Response(
-        stream_quantum_advantage(),
-        mimetype='text/event-stream',
-        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'}
-    )
+@app.route('/api/core/stop', methods=['POST'])
+def stop_core():
+    """Stop quantum core"""
+    try:
+        if server_state['quantum_core']:
+            server_state['quantum_core'].stop()
+            server_state['quantum_core_running'] = False
+            logger.info("Quantum core stopped")
+        
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        logger.error(f"Core stop failed: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
-@app.route('/api/stream-entanglement')
-def stream_entanglement_endpoint():
-    STATE.experiments_run += 1
-    return Response(
-        stream_entanglement_test(),
-        mimetype='text/event-stream',
-        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'}
-    )
+@app.route('/api/core/status', methods=['GET'])
+def core_status():
+    """Get quantum core status"""
+    try:
+        if server_state['quantum_core']:
+            status = server_state['quantum_core'].get_status()
+            return jsonify({'success': True, 'status': status})
+        else:
+            return jsonify({'success': False, 'error': 'Core not started'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
-# ============================================================================
+@app.route('/api/experiments/list', methods=['GET'])
+def list_experiments():
+    """List available experiments"""
+    try:
+        if server_state['experiment_runner'] is None:
+            runner = ExperimentRunner()
+            server_state['experiment_runner'] = runner
+        
+        experiments = server_state['experiment_runner'].list_experiments()
+        return jsonify({'success': True, 'experiments': experiments})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/experiments/run', methods=['POST'])
+def run_experiment():
+    """Run experiment with streaming logs"""
+    try:
+        data = request.get_json()
+        experiment_name = data.get('experiment')
+        
+        if not experiment_name:
+            return jsonify({'success': False, 'error': 'No experiment specified'})
+        
+        logger.info("="*80)
+        logger.info(f"RUNNING EXPERIMENT: {experiment_name}")
+        logger.info("="*80)
+        
+        # Get API key
+        api_key = request.headers.get('X-API-Key') or data.get('api_key', 'DEMO_KEY')
+        
+        if server_state['experiment_runner'] is None:
+            server_state['experiment_runner'] = ExperimentRunner()
+        
+        # Run experiment in background thread
+        def run_in_background():
+            try:
+                for log_entry in server_state['experiment_runner'].run_experiment(
+                    experiment_name, 
+                    api_key=api_key,
+                    db_path='moonshine.db'
+                ):
+                    log_capture.emit(log_entry.to_dict())
+            except Exception as e:
+                logger.error(f"Experiment failed: {e}")
+                logger.error(traceback.format_exc())
+        
+        thread = threading.Thread(target=run_in_background, daemon=True)
+        thread.start()
+        
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        logger.error(f"Experiment run failed: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/status', methods=['GET'])
+def status():
+    """Get server status"""
+    return jsonify({
+        'success': True,
+        'status': server_state
+    })
+
+# ═════════════════════════════════════════════════════════════════════════
 # MAIN
-# ============================================================================
-
-def main():
-    print("="*80)
-    print("MOONSHINE QUANTUM EXPERIMENTS SERVER")
-    print("="*80)
-    print()
-    print(f"Version: {VERSION}")
-    print(f"Build: {BUILD_DATE}")
-    print()
-    print("Checking components...")
-    print(f"  Qiskit: {'✓' if QISKIT_AVAILABLE else '✗'}")
-    print(f"  Lattice Builder: {'✓' if LATTICE_BUILDER_AVAILABLE else '✗'}")
-    print(f"  World Record QFT: {'✓' if WORLD_RECORD_QFT_AVAILABLE else '✗'}")
-    print(f"  Quantum Advantage: {'✓' if ADVANTAGE_DEMO_AVAILABLE else '✗'}")
-    print()
-    
-    # Check for existing lattice
-    if Path(STATE.db_path).exists():
-        print(f"✓ Found existing lattice: {STATE.db_path}")
-        STATE.lattice_ready = True
-    else:
-        print(f"⚠ No lattice found - will build on request")
-    
-    print()
-    print("Starting Flask server...")
-    print("  Access at: http://localhost:10000")
-    print()
-    print("Press Ctrl+C to stop")
-    print()
-    
-    app.run(host='0.0.0.0', port=10000, debug=False, threaded=True)
+# ═════════════════════════════════════════════════════════════════════════
 
 if __name__ == '__main__':
-    main()
+    logger.info("="*80)
+    logger.info("🌌 MOONSHINE QUANTUM SERVER STARTING")
+    logger.info("="*80)
+    logger.info("Server: http://localhost:5000")
+    logger.info("Terminal: http://localhost:5000/")
+    logger.info("="*80)
+    
+    app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
