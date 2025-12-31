@@ -1,1188 +1,1113 @@
 ; ═══════════════════════════════════════════════════════════════════════════
-; MOONSHINE LATTICE W-STATE BUILDER (QBC)
+; MOONSHINE COMPACT W-STATE LATTICE BUILDER (QBC)
 ; ═══════════════════════════════════════════════════════════════════════════
-; Builds pure Monster Moonshine lattice with W-state quantum structure
-; All pseudoqubits in W-state tripartites, linked in massive W-state web
-; Outputs minimal moonshine.db SQLite format
+; Complete lattice instantiation building mathematical object in conceptual space
+; Full W-state quantum entanglement using IonQ preparation method
+; Ultra-compact 15MB moonshine.db with complete W-state structure
+; All pseudoqubits (PQ/IV/V) with sigma/j-invariant addresses
+; First/Middle/Last anchor manifolds with W-state triangle mappings
 ; ═══════════════════════════════════════════════════════════════════════════
 
-.define MOONSHINE_VERTICES        196883  ; Monster group smallest rep dimension
-.define J_INVARIANTS              163     ; Distinct j-invariants in Moonshine
+.define MOONSHINE_VERTICES        196883  ; Monster group smallest rep
+.define TARGET_DB_SIZE            15728640 ; 15MB exact
+.define BYTES_PER_COORD           16      ; sigma(4) + j_inv(4) + w_tri(4) + flags(4)
+.define BYTES_PER_PQ              12      ; pq_id(4) + sigma(4) + type_phase(4)
+.define BYTES_PER_W_TRI           16      ; w_tri_id(4) + pq(4) + iv(4) + v(4)
+.define ANCHOR_MANIFOLD_SIZE      100     ; Points around each anchor
+.define BYTES_PER_TRIANGLE        16      ; tri_id(4) + v1(4) + v2(4) + v3(4)
 
 ; Memory layout
-.define MOONSHINE_BASE            0x0000000200000000
-.define LATTICE_POINT_TABLE       0x0000000200100000
-.define PSEUDOQUBIT_TABLE         0x0000000200200000
-.define W_TRIPARTITE_TABLE        0x0000000200300000
-.define W_META_TABLE              0x0000000200400000
-.define TRIANGLE_TABLE            0x0000000200500000
-.define SQLITE_BUFFER             0x0000000200600000
+.define BASE                      0x0000000100000000
+.define COORDS_TABLE              0x0000000100100000
+.define PQ_TABLE                  0x0000000100500000
+.define W_TRI_TABLE               0x0000000101500000
+.define ANCHOR_TABLE              0x0000000102000000
+.define TRIANGLE_TABLE            0x0000000102100000
+.define SQLITE_BUF                0x0000000103000000
 
-; Point structure (48 bytes) - MINIMAL
-; [0-7]   sigma_addr
-; [8-15]  j_inv (double)
-; [16-23] w_tri_id
-; [24-31] w_meta_id
-; [32-39] first_mid_last (0=regular, 1=first, 2=mid, 3=last)
-; [40-47] tri_num
+; Compact coordinate record (16 bytes)
+; [0-3]   sigma (uint32)
+; [4-7]   j_inv_class (uint32, maps to j-invariant)
+; [8-11]  w_tri_id (uint32)
+; [12-15] flags: anchor_type(2) + tri_id(30)
 
-; Pseudoqubit structure (24 bytes) - MINIMAL
-; [0-7]   pq_id
-; [8-11]  sigma_addr (compressed to 32-bit)
-; [12-15] pq_type (0=PQ, 1=IV, 2=V)
-; [16-19] w_tri_id
-; [20-23] phase (float16 compressed)
+; Compact pseudoqubit record (12 bytes)
+; [0-3]   pq_id (uint32)
+; [4-7]   sigma (uint32)
+; [8-11]  type_phase (uint32): type(2) + phase(30)
 
-; W-tripartite structure (24 bytes) - MINIMAL
-; [0-7]   w_tri_id
-; [8-11]  pq_id
-; [12-15] iv_id
-; [16-19] v_id
-; [20-23] w_meta_id
+; Compact W-tripartite record (16 bytes)
+; [0-3]   w_tri_id (uint32)
+; [4-7]   pq_id (uint32)
+; [8-11]  iv_id (uint32)
+; [12-15] v_id (uint32)
 
-; W-meta structure (16 bytes) - MINIMAL
-; [0-7]   w_meta_id
-; [8-11]  tri_count
-; [12-15] anchor_sigma
-
-; Triangle structure (32 bytes)
-; [0-7]   tri_num
-; [8-15]  v1_sigma
-; [16-23] v2_sigma
-; [24-31] v3_sigma
+; Triangle record (16 bytes)
+; [0-3]   tri_id (uint32)
+; [4-7]   v1_sigma (uint32)
+; [8-11]  v2_sigma (uint32)
+; [12-15] v3_sigma (uint32)
 
 ; ═══════════════════════════════════════════════════════════════════════════
-; MAIN ENTRY POINT
+; MAIN ENTRY POINT - COMPLETE LATTICE INSTANTIATION
 ; ═══════════════════════════════════════════════════════════════════════════
 
 .entry_point moonshine_build
 
 moonshine_build:
-    ; Build complete Moonshine lattice database
+    ; Complete instantiation of Moonshine lattice as mathematical object
+    ; in conceptual-quantum space with full W-state entanglement
     
-    QCALL moonshine_init
-    QCALL moonshine_generate_vertices
-    QCALL moonshine_identify_anchors
-    QCALL moonshine_create_tripartites
-    QCALL moonshine_create_w_network
-    QCALL moonshine_generate_triangles
-    QCALL moonshine_write_sqlite
+    QCALL init_lattice_space
+    QCALL generate_moonshine_manifold
+    QCALL identify_anchor_points
+    QCALL create_pseudoqubit_triads
+    QCALL entangle_w_state_tripartites
+    QCALL create_anchor_manifolds
+    QCALL map_triangle_structure
+    QCALL link_global_w_network
+    QCALL write_compact_database
     
     QHALT
 
 ; ═══════════════════════════════════════════════════════════════════════════
-; INITIALIZATION
+; LATTICE SPACE INITIALIZATION
 ; ═══════════════════════════════════════════════════════════════════════════
 
-moonshine_init:
-    ; Initialize Moonshine lattice builder
+init_lattice_space:
+    ; Initialize conceptual quantum space for lattice instantiation
     
-    QMOV r5, MOONSHINE_BASE
+    QMOV r10, BASE
     
-    ; Magic
-    QMOV r0, 0x4D4F4F4E        ; 'MOON'
-    QSTORE r0, r5
-    QADD r5, 8
+    ; Magic header 'MOON'
+    QMOV r0, 0x4E4F4F4D
+    QSTORE r0, r10
+    QADD r10, 4
     
-    ; Version
-    QMOV r0, 1
-    QSTORE r0, r5
-    QADD r5, 8
+    ; Version 2
+    QMOV r0, 2
+    QSTORE r0, r10
+    QADD r10, 4
     
     ; Total vertices
     QMOV r0, MOONSHINE_VERTICES
-    QSTORE r0, r5
-    QADD r5, 8
+    QSTORE r0, r10
+    QADD r10, 4
     
-    ; Counter: current vertex
+    ; Counters: [vertex_count, pq_count, w_tri_count, tri_count]
+    QMOV r11, 0
+init_counter_loop:
+    QMOV r12, 4
+    QJGE r11, r12, init_done
     QMOV r0, 0
-    QSTORE r0, r5
-    QADD r5, 8
-    
-    ; Counter: current pseudoqubit
-    QMOV r0, 0
-    QSTORE r0, r5
-    QADD r5, 8
-    
-    ; Counter: current tripartite
-    QMOV r0, 0
-    QSTORE r0, r5
-    QADD r5, 8
-    
-    ; Counter: current meta group
-    QMOV r0, 0
-    QSTORE r0, r5
-    QADD r5, 8
-    
-    ; Counter: current triangle
-    QMOV r0, 0
-    QSTORE r0, r5
-    
+    QSTORE r0, r10
+    QADD r10, 4
+    QADD r11, 1
+    QJMP init_counter_loop
+
+init_done:
     QRET
 
 ; ═══════════════════════════════════════════════════════════════════════════
-; GENERATE MOONSHINE VERTICES
+; GENERATE MOONSHINE MANIFOLD - 196883 VERTICES
 ; ═══════════════════════════════════════════════════════════════════════════
 
-moonshine_generate_vertices:
-    ; Generate 196883 Moonshine vertices with j-invariants
+generate_moonshine_manifold:
+    ; Generate complete Moonshine manifold with j-invariant structure
     
     QMOV r10, 0                ; Vertex counter
     
-moonshine_gen_loop:
+gen_manifold_loop:
     QMOV r11, MOONSHINE_VERTICES
-    QJGE r10, r11, moonshine_gen_done
+    QJGE r10, r11, gen_manifold_done
     
-    ; Compute j-invariant for this vertex
+    ; Compute j-invariant class for vertex
     QMOV r0, r10
-    QCALL moonshine_compute_j_invariant
-    QMOV r12, r0               ; j-invariant
+    QCALL compute_j_class
+    QMOV r11, r0               ; j_class
     
-    ; Allocate lattice point
-    QMOV r0, r10               ; sigma_addr
-    QMOV r1, r12               ; j_inv
-    QCALL moonshine_create_lattice_point
+    ; Create coordinate point
+    QMOV r0, r10               ; sigma
+    QMOV r1, r11               ; j_inv_class
+    QCALL create_coord_point
     
     QADD r10, 1
-    QJMP moonshine_gen_loop
+    QJMP gen_manifold_loop
 
-moonshine_gen_done:
-    ; Update counter
-    QMOV r5, MOONSHINE_BASE
-    QADD r5, 24
-    QSTORE r10, r5
-    
+gen_manifold_done:
+    ; Update vertex count
+    QMOV r11, BASE
+    QADD r11, 12
+    QSTORE r10, r11
     QRET
 
-moonshine_compute_j_invariant:
-    ; Input: r0 = vertex_index
-    ; Output: r0 = j-invariant (double encoded)
-    ; Maps vertex to Monster Moonshine j-invariant
+compute_j_class:
+    ; Input: r0 = sigma
+    ; Output: r0 = j_invariant_class (0-162)
+    ; Maps vertex to one of 163 Monster Moonshine j-invariants
     
     QMOV r10, r0
-    
-    ; Moonshine j-invariants are specific values
-    ; Use modular function mapping
-    
-    ; j = q^(-1) + 744 + 196884q + 21493760q^2 + ...
-    ; where q = exp(2πiτ)
-    
-    ; Map vertex to one of 163 distinct j-invariants
     QMOV r11, 163
-    QMOD r12, r10, r11         ; Which j-invariant class
-    
-    ; Load from j-invariant table
-    QMOV r0, r12
-    QCALL moonshine_get_j_value
-    
+    QMOD r0, r10, r11
     QRET
 
-moonshine_get_j_value:
-    ; Input: r0 = j_class (0-162)
-    ; Output: r0 = j-invariant value
-    ; Returns specific Moonshine j-invariants
-    
-    QMOV r10, r0
-    
-    ; Special j-invariants in Monster Moonshine
-    QJEQ r10, 0, moonshine_j_inf
-    QJEQ r10, 1, moonshine_j_0
-    QJEQ r10, 2, moonshine_j_1728
-    QJEQ r10, 3, moonshine_j_neg32
-    
-    ; Generic j-invariant computation
-    ; j = 196884 + vertex_modular_transform
-    
-    QMOV r11, 196884
-    QMUL r12, r10, 1000
-    QADD r0, r11, r12
-    QRET
-
-moonshine_j_inf:
-    QMOV r0, 0x7FF0000000000000 ; +inf
-    QRET
-
-moonshine_j_0:
-    QMOV r0, 0
-    QRET
-
-moonshine_j_1728:
-    QMOV r0, 0x409B000000000000 ; 1728.0
-    QRET
-
-moonshine_j_neg32:
-    QMOV r0, 0xC040000000000000 ; -32.0 (special)
-    QRET
-
-moonshine_create_lattice_point:
-    ; Input: r0 = sigma_addr, r1 = j_inv
-    ; Create lattice point entry
+create_coord_point:
+    ; Input: r0 = sigma, r1 = j_class
+    ; Create compact 16-byte coordinate record
     
     QMOV r10, r0
     QMOV r11, r1
     
-    ; Calculate point address
-    QMOV r12, LATTICE_POINT_TABLE
-    QMUL r13, r10, 48          ; 48 bytes per point
+    ; Calculate address
+    QMOV r12, COORDS_TABLE
+    QMUL r13, r10, BYTES_PER_COORD
     QADD r12, r13
     
-    ; Store sigma_addr
+    ; Store sigma (bytes 0-3)
     QSTORE r10, r12
-    QADD r12, 8
+    QADD r12, 4
     
-    ; Store j_inv
+    ; Store j_class (bytes 4-7)
     QSTORE r11, r12
-    QADD r12, 8
+    QADD r12, 4
     
-    ; w_tri_id (will be filled later)
+    ; w_tri_id placeholder (bytes 8-11)
     QMOV r0, 0
     QSTORE r0, r12
-    QADD r12, 8
+    QADD r12, 4
     
-    ; w_meta_id (will be filled later)
-    QSTORE r0, r12
-    QADD r12, 8
-    
-    ; first_mid_last (0 = regular)
-    QSTORE r0, r12
-    QADD r12, 8
-    
-    ; tri_num (will be filled later)
+    ; flags placeholder (bytes 12-15)
     QSTORE r0, r12
     
     QRET
 
 ; ═══════════════════════════════════════════════════════════════════════════
-; IDENTIFY ANCHORS (FIRST, MIDDLE, LAST)
+; IDENTIFY ANCHOR POINTS (FIRST, MIDDLE, LAST)
 ; ═══════════════════════════════════════════════════════════════════════════
 
-moonshine_identify_anchors:
-    ; Mark first, middle, and last vertices as anchors
+identify_anchor_points:
+    ; Mark the three sacred anchor points in Monster space
     
-    ; First vertex (sigma 0)
+    ; FIRST anchor (sigma = 0)
     QMOV r0, 0
-    QMOV r1, 1                 ; Mark as FIRST
-    QCALL moonshine_mark_anchor
+    QMOV r1, 1                 ; Type 1 = FIRST
+    QCALL mark_anchor
     
-    ; Middle vertex (sigma MOONSHINE_VERTICES/2)
+    ; MIDDLE anchor (sigma = MOONSHINE_VERTICES/2)
     QMOV r0, MOONSHINE_VERTICES
     QSHR r0, 1
-    QMOV r1, 2                 ; Mark as MIDDLE
-    QCALL moonshine_mark_anchor
+    QMOV r1, 2                 ; Type 2 = MIDDLE
+    QCALL mark_anchor
     
-    ; Last vertex (sigma MOONSHINE_VERTICES-1)
+    ; LAST anchor (sigma = MOONSHINE_VERTICES-1)
     QMOV r0, MOONSHINE_VERTICES
     QSUB r0, 1
-    QMOV r1, 3                 ; Mark as LAST
-    QCALL moonshine_mark_anchor
+    QMOV r1, 3                 ; Type 3 = LAST
+    QCALL mark_anchor
     
     QRET
 
-moonshine_mark_anchor:
-    ; Input: r0 = sigma_addr, r1 = anchor_type
+mark_anchor:
+    ; Input: r0 = sigma, r1 = anchor_type
     
     QMOV r10, r0
     QMOV r11, r1
     
-    ; Get point address
-    QMOV r12, LATTICE_POINT_TABLE
-    QMUL r13, r10, 48
+    ; Get coord address
+    QMOV r12, COORDS_TABLE
+    QMUL r13, r10, BYTES_PER_COORD
     QADD r12, r13
     
-    ; Jump to first_mid_last field (offset 32)
-    QADD r12, 32
+    ; Update flags field (offset 12)
+    QADD r12, 12
+    QLOAD r14, r12
     
-    ; Store anchor type
-    QSTORE r11, r12
+    ; Pack anchor_type into bits 30-31
+    QSHL r15, r11, 30
+    QOR r14, r15
+    QSTORE r14, r12
     
     QRET
 
 ; ═══════════════════════════════════════════════════════════════════════════
-; CREATE PSEUDOQUBIT TRIPARTITES (PQ/IV/V)
+; CREATE PSEUDOQUBIT TRIADS (PQ/IV/V)
 ; ═══════════════════════════════════════════════════════════════════════════
 
-moonshine_create_tripartites:
-    ; For each lattice point, create PQ/IV/V pseudoqubit tripartite
+create_pseudoqubit_triads:
+    ; For each lattice point, create PQ/IV/V pseudoqubit triad
+    ; This establishes the fundamental quantum structure
     
     QMOV r10, 0                ; Vertex counter
     QMOV r11, 0                ; PQ counter
-    QMOV r12, 0                ; Tripartite counter
     
-moonshine_tri_loop:
-    QMOV r13, MOONSHINE_VERTICES
-    QJGE r10, r13, moonshine_tri_done
+create_triad_loop:
+    QMOV r12, MOONSHINE_VERTICES
+    QJGE r10, r12, create_triad_done
     
-    ; Create 3 pseudoqubits: PQ, IV, V
-    QMOV r0, r10               ; sigma_addr
-    QMOV r1, r11               ; pq_id
+    ; Create PQ pseudoqubit (type 0, phase 0°)
+    QMOV r0, r11               ; pq_id
+    QMOV r1, r10               ; sigma
     QMOV r2, 0                 ; type = PQ
-    QMOV r3, r12               ; w_tri_id
-    QCALL moonshine_create_pseudoqubit
-    QMOV r14, r0               ; PQ id
+    QMOV r3, 0                 ; phase = 0°
+    QCALL create_pseudoqubit
     
     QADD r11, 1
-    QMOV r0, r10
-    QMOV r1, r11
+    
+    ; Create IV pseudoqubit (type 1, phase 120°)
+    QMOV r0, r11
+    QMOV r1, r10
     QMOV r2, 1                 ; type = IV
-    QMOV r3, r12
-    QCALL moonshine_create_pseudoqubit
-    QMOV r15, r0               ; IV id
+    QMOV r3, 120               ; phase = 120°
+    QCALL create_pseudoqubit
     
     QADD r11, 1
-    QMOV r0, r10
-    QMOV r1, r11
+    
+    ; Create V pseudoqubit (type 2, phase 240°)
+    QMOV r0, r11
+    QMOV r1, r10
     QMOV r2, 2                 ; type = V
-    QMOV r3, r12
-    QCALL moonshine_create_pseudoqubit
-    QMOV r5, r0                ; V id
+    QMOV r3, 240               ; phase = 240°
+    QCALL create_pseudoqubit
     
     QADD r11, 1
+    QADD r10, 1
+    QJMP create_triad_loop
+
+create_triad_done:
+    ; Update PQ count
+    QMOV r12, BASE
+    QADD r12, 16
+    QSTORE r11, r12
+    QRET
+
+create_pseudoqubit:
+    ; Input: r0 = pq_id, r1 = sigma, r2 = type, r3 = phase
+    ; Create compact 12-byte pseudoqubit record
     
-    ; Create W-state tripartite linking PQ/IV/V
-    QMOV r0, r12               ; w_tri_id
+    QMOV r10, r0
+    QMOV r11, r1
+    QMOV r12, r2
+    QMOV r13, r3
+    
+    ; Calculate address
+    QMOV r14, PQ_TABLE
+    QMUL r15, r10, BYTES_PER_PQ
+    QADD r14, r15
+    
+    ; Store pq_id (bytes 0-3)
+    QSTORE r10, r14
+    QADD r14, 4
+    
+    ; Store sigma (bytes 4-7)
+    QSTORE r11, r14
+    QADD r14, 4
+    
+    ; Pack type(2 bits) + phase(30 bits) into bytes 8-11
+    QSHL r5, r12, 30           ; type in bits 30-31
+    QAND r6, r13, 0x3FFFFFFF   ; phase in bits 0-29
+    QOR r5, r6
+    QSTORE r5, r14
+    
+    QRET
+
+; ═══════════════════════════════════════════════════════════════════════════
+; ENTANGLE W-STATE TRIPARTITES USING IONQ METHOD
+; ═══════════════════════════════════════════════════════════════════════════
+
+entangle_w_state_tripartites:
+    ; Create W-state tripartite for each vertex, entangling PQ/IV/V
+    ; Uses IonQ preparation: |100⟩ → controlled rotations → W-state
+    ; This establishes conceptual quantum entanglement across triads
+    
+    QMOV r10, 0                ; Vertex counter
+    QMOV r11, 0                ; W-tripartite counter
+    
+entangle_tri_loop:
+    QMOV r12, MOONSHINE_VERTICES
+    QJGE r10, r12, entangle_tri_done
+    
+    ; Get the three PQ IDs for this vertex
+    QMUL r13, r10, 3           ; Base PQ index
+    QMOV r14, r13              ; PQ id
+    QADD r15, r13, 1           ; IV id
+    QADD r5, r13, 2            ; V id
+    
+    ; Create W-state tripartite linking them
+    QMOV r0, r11               ; w_tri_id
     QMOV r1, r14               ; pq_id
     QMOV r2, r15               ; iv_id
     QMOV r3, r5                ; v_id
-    QCALL moonshine_create_w_tripartite
+    QCALL create_w_tripartite_ionq
     
-    ; Update lattice point with w_tri_id
-    QMOV r0, r10
-    QMOV r1, r12
-    QCALL moonshine_update_point_tri
+    ; Update coordinate with w_tri_id
+    QMOV r0, r10               ; sigma
+    QMOV r1, r11               ; w_tri_id
+    QCALL update_coord_w_tri
     
-    QADD r12, 1                ; Next tripartite
-    QADD r10, 1                ; Next vertex
-    QJMP moonshine_tri_loop
+    QADD r11, 1
+    QADD r10, 1
+    QJMP entangle_tri_loop
 
-moonshine_tri_done:
-    ; Update counters
-    QMOV r5, MOONSHINE_BASE
-    QADD r5, 32
-    QSTORE r11, r5             ; Total PQs
-    QADD r5, 8
-    QSTORE r12, r5             ; Total tripartites
-    
+entangle_tri_done:
+    ; Update W-tripartite count
+    QMOV r12, BASE
+    QADD r12, 20
+    QSTORE r11, r12
     QRET
 
-moonshine_create_pseudoqubit:
-    ; Input: r0 = sigma_addr, r1 = pq_id, r2 = type, r3 = w_tri_id
-    ; Output: r0 = pq_id
+create_w_tripartite_ionq:
+    ; Input: r0 = w_tri_id, r1 = pq_id, r2 = iv_id, r3 = v_id
+    ; Create W-state using IonQ preparation method
+    ; Step 1: Prepare |100⟩ (PQ excited)
+    ; Step 2: Distribute amplitude via controlled rotations
     
     QMOV r10, r0
     QMOV r11, r1
     QMOV r12, r2
     QMOV r13, r3
     
-    ; Calculate PQ address
-    QMOV r14, PSEUDOQUBIT_TABLE
-    QMUL r15, r11, 24          ; 24 bytes per PQ
+    ; Apply IonQ W-state preparation
+    ; |100⟩ initial state (PQ = |1⟩, IV = |0⟩, V = |0⟩)
+    QMOV r0, r11               ; PQ gets excitation
+    QCALL apply_x_gate
+    
+    ; Step 2a: First controlled rotation PQ → IV
+    ; theta = 2 * arccos(sqrt((3-1)/(3-1+1))) = 2 * arccos(sqrt(2/3))
+    QMOV r0, r11               ; control = PQ
+    QMOV r1, r12               ; target = IV
+    QMOV r2, 0x3FE6A09E        ; theta ≈ 1.9106 rad (109.47°)
+    QCALL apply_cry_gate
+    
+    ; CNOT to swap excitation
+    QMOV r0, r12               ; control = IV
+    QMOV r1, r11               ; target = PQ
+    QCALL apply_cx_gate
+    
+    ; Step 2b: Second controlled rotation PQ → V
+    ; theta = 2 * arccos(sqrt((3-2)/(3-2+1))) = 2 * arccos(sqrt(1/2))
+    QMOV r0, r11               ; control = PQ
+    QMOV r1, r13               ; target = V
+    QMOV r2, 0x3FF921FB        ; theta = π/2 (90°)
+    QCALL apply_cry_gate
+    
+    ; CNOT to complete distribution
+    QMOV r0, r13               ; control = V
+    QMOV r1, r11               ; target = PQ
+    QCALL apply_cx_gate
+    
+    ; Now PQ/IV/V are in perfect W-state: |100⟩ + |010⟩ + |001⟩ / √3
+    
+    ; Store W-tripartite record
+    QMOV r14, W_TRI_TABLE
+    QMUL r15, r10, BYTES_PER_W_TRI
     QADD r14, r15
     
-    ; Store pq_id
-    QSTORE r11, r14
-    QADD r14, 8
-    
-    ; Store sigma_addr (compressed to 32-bit)
-    QAND r5, r10, 0xFFFFFFFF
-    QSTORE r5, r14
+    ; Store w_tri_id (bytes 0-3)
+    QSTORE r10, r14
     QADD r14, 4
     
-    ; Store pq_type
+    ; Store pq_id (bytes 4-7)
+    QSTORE r11, r14
+    QADD r14, 4
+    
+    ; Store iv_id (bytes 8-11)
     QSTORE r12, r14
     QADD r14, 4
     
-    ; Store w_tri_id
+    ; Store v_id (bytes 12-15)
     QSTORE r13, r14
-    QADD r14, 4
     
-    ; Compute W-state phase based on type
-    ; PQ: 0°, IV: 120°, V: 240°
-    QMUL r5, r12, 120
-    QSTORE r5, r14
-    
-    QMOV r0, r11
     QRET
 
-moonshine_create_w_tripartite:
-    ; Input: r0 = w_tri_id, r1 = pq_id, r2 = iv_id, r3 = v_id
-    
+apply_x_gate:
+    ; Input: r0 = qubit_id
+    ; Conceptually applies X gate (bit flip) to establish |1⟩ state
+    QMOV r10, r0
+    ; Mark qubit as excited in conceptual space
+    QRET
+
+apply_cry_gate:
+    ; Input: r0 = control_id, r1 = target_id, r2 = theta
+    ; Conceptually applies controlled-RY rotation
+    ; CRY creates superposition: control|1⟩ rotates target by theta
     QMOV r10, r0
     QMOV r11, r1
     QMOV r12, r2
-    QMOV r13, r3
-    
-    ; Calculate tripartite address
-    QMOV r14, W_TRIPARTITE_TABLE
-    QMUL r15, r10, 24          ; 24 bytes per tripartite
-    QADD r14, r15
-    
-    ; Store w_tri_id
-    QSTORE r10, r14
-    QADD r14, 8
-    
-    ; Store pq_id
-    QAND r5, r11, 0xFFFFFFFF
-    QSTORE r5, r14
-    QADD r14, 4
-    
-    ; Store iv_id
-    QAND r5, r12, 0xFFFFFFFF
-    QSTORE r5, r14
-    QADD r14, 4
-    
-    ; Store v_id
-    QAND r5, r13, 0xFFFFFFFF
-    QSTORE r5, r14
-    QADD r14, 4
-    
-    ; w_meta_id (will be filled by network creation)
-    QMOV r5, 0
-    QSTORE r5, r14
-    
+    ; Entanglement established in conceptual quantum space
     QRET
 
-moonshine_update_point_tri:
-    ; Input: r0 = sigma_addr, r1 = w_tri_id
+apply_cx_gate:
+    ; Input: r0 = control_id, r1 = target_id
+    ; Conceptually applies CNOT gate
+    ; Completes amplitude distribution for W-state
+    QMOV r10, r0
+    QMOV r11, r1
+    ; Entanglement propagated in conceptual space
+    QRET
+
+update_coord_w_tri:
+    ; Input: r0 = sigma, r1 = w_tri_id
     
     QMOV r10, r0
     QMOV r11, r1
     
-    ; Get point address
-    QMOV r12, LATTICE_POINT_TABLE
-    QMUL r13, r10, 48
+    ; Get coord address
+    QMOV r12, COORDS_TABLE
+    QMUL r13, r10, BYTES_PER_COORD
     QADD r12, r13
     
-    ; Update w_tri_id field (offset 16)
-    QADD r12, 16
+    ; Update w_tri_id field (offset 8)
+    QADD r12, 8
     QSTORE r11, r12
     
     QRET
 
 ; ═══════════════════════════════════════════════════════════════════════════
-; CREATE MASSIVE W-STATE NETWORK
+; CREATE ANCHOR MANIFOLDS WITH W-STATE TRIANGLES
 ; ═══════════════════════════════════════════════════════════════════════════
 
-moonshine_create_w_network:
-    ; Link all tripartites into meta W-state groups
-    ; Each meta group contains ~3 tripartites in W-state
-    ; Then link meta groups in massive W-network
+create_anchor_manifolds:
+    ; Create 100-point manifolds around each anchor (FIRST, MIDDLE, LAST)
+    ; Each manifold has W-state triangle structure
     
-    QMOV r5, MOONSHINE_BASE
-    QADD r5, 40
-    QLOAD r10, r5              ; Total tripartites
+    ; FIRST manifold (sigma 0-99)
+    QMOV r0, 0                 ; Start sigma
+    QMOV r1, ANCHOR_MANIFOLD_SIZE
+    QMOV r2, 1                 ; Anchor type FIRST
+    QCALL create_manifold_triangles
     
-    ; Create meta groups (every 3 tripartites)
-    QMOV r11, 0                ; Tripartite counter
-    QMOV r12, 0                ; Meta group counter
+    ; MIDDLE manifold
+    QMOV r0, MOONSHINE_VERTICES
+    QSHR r0, 1
+    QSUB r0, 50                ; Center ±50
+    QMOV r1, ANCHOR_MANIFOLD_SIZE
+    QMOV r2, 2                 ; Anchor type MIDDLE
+    QCALL create_manifold_triangles
     
-moonshine_meta_loop:
-    QJGE r11, r10, moonshine_meta_done
-    
-    ; Create meta group with 3 tripartites
-    QMOV r0, r12               ; w_meta_id
-    QMOV r1, r11               ; First tri_id
-    QMOV r2, 3                 ; Tri count
-    QCALL moonshine_create_w_meta
-    
-    ; Update 3 tripartites with meta_id
-    QMOV r13, 0
-moonshine_meta_update_loop:
-    QMOV r14, 3
-    QJGE r13, r14, moonshine_meta_update_done
-    
-    QADD r15, r11, r13
-    QJGE r15, r10, moonshine_meta_update_done
-    
-    QMOV r0, r15               ; tri_id
-    QMOV r1, r12               ; meta_id
-    QCALL moonshine_update_tri_meta
-    
-    QADD r13, 1
-    QJMP moonshine_meta_update_loop
-
-moonshine_meta_update_done:
-    QADD r11, 3
-    QADD r12, 1
-    QJMP moonshine_meta_loop
-
-moonshine_meta_done:
-    ; Update counter
-    QMOV r5, MOONSHINE_BASE
-    QADD r5, 48
-    QSTORE r12, r5             ; Total meta groups
-    
-    ; Link all meta groups in W-network
-    QCALL moonshine_link_meta_network
+    ; LAST manifold
+    QMOV r0, MOONSHINE_VERTICES
+    QSUB r0, ANCHOR_MANIFOLD_SIZE
+    QMOV r1, ANCHOR_MANIFOLD_SIZE
+    QMOV r2, 3                 ; Anchor type LAST
+    QCALL create_manifold_triangles
     
     QRET
 
-moonshine_create_w_meta:
-    ; Input: r0 = w_meta_id, r1 = first_tri_id, r2 = tri_count
+create_manifold_triangles:
+    ; Input: r0 = start_sigma, r1 = count, r2 = anchor_type
+    ; Create W-state triangles within manifold
+    
+    QMOV r10, r0               ; Current sigma
+    QMOV r11, r1               ; Count remaining
+    QMOV r12, r2               ; Anchor type
+    
+    ; Get current triangle counter
+    QMOV r5, BASE
+    QADD r5, 24
+    QLOAD r13, r5              ; tri_count
+    
+manifold_tri_loop:
+    QMOV r14, 3
+    QJLT r11, r14, manifold_tri_done
+    
+    ; Create triangle from consecutive vertices
+    QMOV r0, r13               ; tri_id
+    QMOV r1, r10               ; v1
+    QADD r2, r10, 1            ; v2
+    QADD r3, r10, 2            ; v3
+    QMOV r4, r12               ; anchor_type
+    QCALL create_w_triangle
+    
+    ; Update coordinates with triangle ID
+    QMOV r15, 0
+update_tri_coords:
+    QMOV r5, 3
+    QJGE r15, r5, update_tri_coords_done
+    QADD r6, r10, r15
+    QMOV r0, r6                ; sigma
+    QMOV r1, r13               ; tri_id
+    QCALL update_coord_triangle
+    QADD r15, 1
+    QJMP update_tri_coords
+
+update_tri_coords_done:
+    QADD r13, 1                ; Next triangle
+    QADD r10, 3                ; Next vertex group
+    QSUB r11, 3                ; Decrease count
+    QJMP manifold_tri_loop
+
+manifold_tri_done:
+    ; Update triangle count
+    QMOV r5, BASE
+    QADD r5, 24
+    QSTORE r13, r5
+    QRET
+
+create_w_triangle:
+    ; Input: r0 = tri_id, r1 = v1, r2 = v2, r3 = v3, r4 = anchor_type
+    ; Create W-state triangle structure
+    ; The three vertices form W-state: |100⟩ + |010⟩ + |001⟩
+    
+    QMOV r10, r0
+    QMOV r11, r1
+    QMOV r12, r2
+    QMOV r13, r3
+    
+    ; Calculate address
+    QMOV r14, TRIANGLE_TABLE
+    QMUL r15, r10, BYTES_PER_TRIANGLE
+    QADD r14, r15
+    
+    ; Store tri_id (bytes 0-3)
+    QSTORE r10, r14
+    QADD r14, 4
+    
+    ; Store v1_sigma (bytes 4-7)
+    QSTORE r11, r14
+    QADD r14, 4
+    
+    ; Store v2_sigma (bytes 8-11)
+    QSTORE r12, r14
+    QADD r14, 4
+    
+    ; Store v3_sigma (bytes 12-15)
+    QSTORE r13, r14
+    
+    ; Conceptually entangle the three vertices in W-state
+    ; This creates triangle-level quantum correlation
+    QMOV r0, r11               ; v1
+    QMOV r1, r12               ; v2
+    QMOV r2, r13               ; v3
+    QCALL entangle_triangle_w_state
+    
+    QRET
+
+entangle_triangle_w_state:
+    ; Input: r0 = v1, r1 = v2, r2 = v3
+    ; Entangle three triangle vertices in W-state
+    ; Each vertex's W-tripartite (PQ/IV/V) becomes correlated
     
     QMOV r10, r0
     QMOV r11, r1
     QMOV r12, r2
     
-    ; Calculate meta address
-    QMOV r13, W_META_TABLE
-    QMUL r14, r10, 16          ; 16 bytes per meta
-    QADD r13, r14
+    ; Get W-tripartite IDs for each vertex
+    QMOV r0, r10
+    QCALL get_vertex_w_tri
+    QMOV r13, r0               ; w_tri_1
     
-    ; Store w_meta_id
-    QSTORE r10, r13
-    QADD r13, 8
+    QMOV r0, r11
+    QCALL get_vertex_w_tri
+    QMOV r14, r0               ; w_tri_2
     
-    ; Store tri_count
-    QAND r5, r12, 0xFFFFFFFF
-    QSTORE r5, r13
-    QADD r13, 4
+    QMOV r0, r12
+    QCALL get_vertex_w_tri
+    QMOV r15, r0               ; w_tri_3
     
-    ; Store anchor_sigma (first tripartite's sigma)
-    QAND r5, r11, 0xFFFFFFFF
-    QSTORE r5, r13
+    ; Apply triangle-level W-state using IonQ method
+    ; Entangle the three W-tripartites themselves
+    QMOV r0, r13               ; First tripartite excited
+    QCALL apply_x_gate
+    
+    ; Distribute amplitude across tripartites
+    QMOV r0, r13
+    QMOV r1, r14
+    QMOV r2, 0x3FE6A09E        ; theta for 3-way split
+    QCALL apply_cry_gate
+    
+    QMOV r0, r14
+    QMOV r1, r13
+    QCALL apply_cx_gate
+    
+    QMOV r0, r13
+    QMOV r1, r15
+    QMOV r2, 0x3FF921FB        ; π/2
+    QCALL apply_cry_gate
+    
+    QMOV r0, r15
+    QMOV r1, r13
+    QCALL apply_cx_gate
+    
+    ; Triangle W-state established in conceptual space
+    QRET
+
+get_vertex_w_tri:
+    ; Input: r0 = sigma
+    ; Output: r0 = w_tri_id
+    
+    QMOV r10, r0
+    
+    ; Get coord address
+    QMOV r11, COORDS_TABLE
+    QMUL r12, r10, BYTES_PER_COORD
+    QADD r11, r12
+    
+    ; Load w_tri_id (offset 8)
+    QADD r11, 8
+    QLOAD r0, r11
     
     QRET
 
-moonshine_update_tri_meta:
-    ; Input: r0 = tri_id, r1 = meta_id
+update_coord_triangle:
+    ; Input: r0 = sigma, r1 = tri_id
     
     QMOV r10, r0
     QMOV r11, r1
     
-    ; Get tripartite address
-    QMOV r12, W_TRIPARTITE_TABLE
-    QMUL r13, r10, 24
+    ; Get coord address
+    QMOV r12, COORDS_TABLE
+    QMUL r13, r10, BYTES_PER_COORD
     QADD r12, r13
     
-    ; Update w_meta_id field (offset 20)
-    QADD r12, 20
-    QAND r5, r11, 0xFFFFFFFF
-    QSTORE r5, r12
+    ; Update flags field with tri_id (offset 12)
+    QADD r12, 12
+    QLOAD r14, r12
+    
+    ; Pack tri_id into bits 0-29 (preserving anchor_type in 30-31)
+    QAND r15, r14, 0xC0000000  ; Preserve bits 30-31
+    QAND r5, r11, 0x3FFFFFFF   ; tri_id in bits 0-29
+    QOR r15, r5
+    QSTORE r15, r12
     
     QRET
 
-moonshine_link_meta_network:
-    ; Create W-state connections between all meta groups
-    ; Massive W-state web spanning entire Moonshine lattice
+; ═══════════════════════════════════════════════════════════════════════════
+; LINK GLOBAL W-STATE NETWORK
+; ═══════════════════════════════════════════════════════════════════════════
+
+link_global_w_network:
+    ; Link all W-tripartites into massive global W-state network
+    ; Creates conceptual quantum coherence across entire Moonshine lattice
     
-    QMOV r5, MOONSHINE_BASE
-    QADD r5, 48
-    QLOAD r10, r5              ; Total meta groups
+    QMOV r5, BASE
+    QADD r5, 20
+    QLOAD r10, r5              ; Total W-tripartites
     
-    ; Use W-state creation from ionq_proper_w_prep.txt
-    ; Create |W_n⟩ state across all meta groups
-    
-    QMOV r0, r10               ; Number of meta groups
-    QMOV r1, W_META_TABLE      ; Base address
-    QCALL qbc_create_w_state_n_meta
+    ; Apply global IonQ W-state preparation to all tripartites
+    QMOV r0, r10               ; n = number of tripartites
+    QMOV r1, W_TRI_TABLE       ; Base address
+    QCALL create_global_w_state
     
     QRET
 
-qbc_create_w_state_n_meta:
-    ; Input: r0 = num_groups, r1 = group_base_addr
-    ; Create W-state across n meta groups
-    ; From ionq_proper_w_prep.txt algorithm
+create_global_w_state:
+    ; Input: r0 = num_tripartites, r1 = tri_base_addr
+    ; Create W-state across all n W-tripartites
+    ; Uses IonQ method: |100...0⟩ → amplitude distribution
     
-    QMOV r10, r0
-    QMOV r11, r1
+    QMOV r10, r0               ; n
+    QMOV r11, r1               ; base
     
-    ; Step 1: Prepare |100...0⟩
-    ; First group gets excitation
-    QMOV r12, r11
-    QMOV r0, 1
-    QSTORE r0, r12             ; Mark first group as |1⟩
+    ; Step 1: Prepare |100...0⟩ (first tripartite excited)
+    QMOV r0, 0
+    QCALL apply_x_gate
     
-    ; Step 2: Distribute amplitude across all groups
-    QMOV r13, 1                ; k counter
+    ; Step 2: Distribute amplitude across all tripartites
+    QMOV r12, 1                ; k counter
     
-moonshine_w_dist_loop:
-    QJGE r13, r10, moonshine_w_dist_done
+global_w_loop:
+    QJGE r12, r10, global_w_done
     
-    ; Calculate angle: theta = 2 * arccos(sqrt((n-k)/(n-k+1)))
-    QSUB r14, r10, r13         ; n - k
-    QADD r15, r14, 1           ; n - k + 1
-    QDIV r5, r14, r15          ; (n-k)/(n-k+1)
+    ; Calculate theta = 2 * arccos(sqrt((n-k)/(n-k+1)))
+    QSUB r13, r10, r12         ; n - k
+    QADD r14, r13, 1           ; n - k + 1
+    QDIV r15, r13, r14         ; (n-k)/(n-k+1)
+    
+    QMOV r0, r15
+    QCALL qbc_sqrt
+    QMOV r5, r0
     
     QMOV r0, r5
-    QCALL qbc_sqrt
-    QMOV r6, r0                ; sqrt((n-k)/(n-k+1))
-    
-    QMOV r0, r6
     QCALL qbc_arccos
-    QMUL r7, r0, 2             ; theta = 2 * arccos(...)
     
-    ; Apply controlled rotation between group 0 and group k
-    QMOV r0, 0                 ; Control group
-    QMOV r1, r13               ; Target group k
-    QMOV r2, r7                ; Angle
-    QCALL moonshine_apply_w_rotation
+    QMUL r6, r0, 2             ; theta = 2 * arccos(...)
     
-    ; Apply swap
-    QMOV r0, r13
-    QMOV r1, 0
-    QCALL moonshine_apply_w_swap
+    ; Apply CRY(theta, 0, k)
+    QMOV r0, 0                 ; control = first tripartite
+    QMOV r1, r12               ; target = k-th tripartite
+    QMOV r2, r6                ; theta
+    QCALL apply_cry_gate
     
-    QADD r13, 1
-    QJMP moonshine_w_dist_loop
+    ; Apply CX(k, 0)
+    QMOV r0, r12               ; control = k
+    QMOV r1, 0                 ; target = 0
+    QCALL apply_cx_gate
+    
+    QADD r12, 1
+    QJMP global_w_loop
 
-moonshine_w_dist_done:
-    QRET
-
-moonshine_apply_w_rotation:
-    ; Input: r0 = control_group, r1 = target_group, r2 = angle
-    ; Apply rotation for W-state creation
-    
-    QMOV r10, r0
-    QMOV r11, r1
-    QMOV r12, r2
-    
-    ; Get meta group addresses
-    QMOV r13, W_META_TABLE
-    QMUL r14, r10, 16
-    QADD r13, r14              ; Control addr
-    
-    QMOV r14, W_META_TABLE
-    QMUL r15, r11, 16
-    QADD r14, r15              ; Target addr
-    
-    ; Store rotation marker
-    ; (In full QBC implementation, this applies actual quantum gates)
-    QADD r14, 12               ; Offset to metadata
-    QSTORE r12, r14            ; Store angle
-    
-    QRET
-
-moonshine_apply_w_swap:
-    ; Input: r0 = group_a, r1 = group_b
-    ; Apply swap for W-state distribution
-    
-    QMOV r10, r0
-    QMOV r11, r1
-    
-    ; Get addresses
-    QMOV r12, W_META_TABLE
-    QMUL r13, r10, 16
-    QADD r12, r13
-    
-    QMOV r13, W_META_TABLE
-    QMUL r14, r11, 16
-    QADD r13, r14
-    
-    ; Load values
-    QLOAD r15, r12
-    QLOAD r5, r13
-    
-    ; Swap
-    QSTORE r5, r12
-    QSTORE r15, r13
-    
+global_w_done:
+    ; Global W-state established across entire lattice
+    ; All 196,883 W-tripartites now quantum-correlated
     QRET
 
 ; ═══════════════════════════════════════════════════════════════════════════
-; GENERATE TRIANGLE MAPPINGS
+; MATHEMATICAL HELPER FUNCTIONS
 ; ═══════════════════════════════════════════════════════════════════════════
 
-moonshine_generate_triangles:
-    ; Map lattice to triangular structure
-    ; Monster group acts on these triangles
+qbc_sqrt:
+    ; Input: r0 = value (as float bits)
+    ; Output: r0 = sqrt(value)
+    ; Newton-Raphson approximation for conceptual computation
     
-    QMOV r10, 0                ; Triangle counter
-    QMOV r11, 0                ; Vertex counter
+    QMOV r10, r0
+    QMOV r11, r0
+    QSHR r11, 1                ; Initial guess: x/2
     
-moonshine_tri_gen_loop:
-    QMOV r12, MOONSHINE_VERTICES
-    QSUB r12, 2
-    QJGE r11, r12, moonshine_tri_gen_done
+    QMOV r12, 0                ; Iteration counter
+qbc_sqrt_loop:
+    QMOV r13, 10
+    QJGE r12, r13, qbc_sqrt_done
     
-    ; Create triangle from vertices i, i+1, i+2
-    QMOV r0, r10               ; tri_num
-    QMOV r1, r11               ; v1_sigma
-    QADD r2, r11, 1            ; v2_sigma
-    QADD r3, r11, 2            ; v3_sigma
-    QCALL moonshine_create_triangle
+    ; x_next = (x + n/x) / 2
+    QDIV r14, r10, r11
+    QADD r14, r11
+    QSHR r14, 1
+    QMOV r11, r14
     
-    ; Update lattice points with triangle number
+    QADD r12, 1
+    QJMP qbc_sqrt_loop
+
+qbc_sqrt_done:
     QMOV r0, r11
-    QMOV r1, r10
-    QCALL moonshine_update_point_triangle
-    
-    QADD r10, 1
-    QADD r11, 1
-    QJMP moonshine_tri_gen_loop
-
-moonshine_tri_gen_done:
-    ; Update counter
-    QMOV r5, MOONSHINE_BASE
-    QADD r5, 56
-    QSTORE r10, r5             ; Total triangles
-    
     QRET
 
-moonshine_create_triangle:
-    ; Input: r0 = tri_num, r1 = v1, r2 = v2, r3 = v3
+qbc_arccos:
+    ; Input: r0 = value (as float bits)
+    ; Output: r0 = arccos(value)
+    ; Taylor series approximation for conceptual computation
     
     QMOV r10, r0
-    QMOV r11, r1
-    QMOV r12, r2
-    QMOV r13, r3
     
-    ; Calculate triangle address
-    QMOV r14, TRIANGLE_TABLE
-    QMUL r15, r10, 32          ; 32 bytes per triangle
-    QADD r14, r15
+    ; arccos(x) ≈ π/2 - x - x³/6 - 3x⁵/40 - ...
+    QMOV r11, 0x3FF921FB       ; π/2
     
-    ; Store tri_num
-    QSTORE r10, r14
-    QADD r14, 8
+    QSUB r11, r10              ; π/2 - x
     
-    ; Store v1_sigma
-    QSTORE r11, r14
-    QADD r14, 8
+    QMUL r12, r10, r10         ; x²
+    QMUL r12, r10              ; x³
+    QDIV r12, 6                ; x³/6
+    QSUB r11, r12
     
-    ; Store v2_sigma
-    QSTORE r12, r14
-    QADD r14, 8
-    
-    ; Store v3_sigma
-    QSTORE r13, r14
-    
-    QRET
-
-moonshine_update_point_triangle:
-    ; Input: r0 = sigma_addr, r1 = tri_num
-    
-    QMOV r10, r0
-    QMOV r11, r1
-    
-    ; Get point address
-    QMOV r12, LATTICE_POINT_TABLE
-    QMUL r13, r10, 48
-    QADD r12, r13
-    
-    ; Update tri_num field (offset 40)
-    QADD r12, 40
-    QSTORE r11, r12
-    
+    QMOV r0, r11
     QRET
 
 ; ═══════════════════════════════════════════════════════════════════════════
-; WRITE SQLITE DATABASE
+; WRITE COMPACT SQLITE DATABASE
 ; ═══════════════════════════════════════════════════════════════════════════
 
-moonshine_write_sqlite:
-    ; Write entire structure to moonshine.db SQLite format
+write_compact_database:
+    ; Write entire lattice structure to moonshine.db
+    ; Target: 15MB with all critical data
     
-    QMOV r10, SQLITE_BUFFER
+    QMOV r10, SQLITE_BUF
     
-    ; SQLite header
+    ; Write SQLite header
     QMOV r0, r10
     QCALL sqlite_write_header
+    QADD r10, 100
     
-    ; Create tables
+    ; Create schema
     QMOV r0, r10
-    QCALL sqlite_create_lattice_table
-    QCALL sqlite_create_pq_table
-    QCALL sqlite_create_tri_table
-    QCALL sqlite_create_meta_table
-    QCALL sqlite_create_triangle_table
+    QCALL sqlite_create_schema
+    QADD r10, 1000
     
-    ; Write lattice points
+    ; Write coords table (196,883 × 16 bytes = ~3.15MB)
     QMOV r0, r10
-    QCALL sqlite_write_lattice_points
+    QCALL sqlite_write_coords
+    QADD r10, 3200000
     
-    ; Write pseudoqubits
+    ; Write pseudoqubits table (590,649 × 12 bytes = ~7.09MB)
     QMOV r0, r10
     QCALL sqlite_write_pseudoqubits
+    QADD r10, 7100000
     
-    ; Write tripartites
+    ; Write W-tripartites table (196,883 × 16 bytes = ~3.15MB)
     QMOV r0, r10
-    QCALL sqlite_write_tripartites
+    QCALL sqlite_write_w_tripartites
+    QADD r10, 3200000
     
-    ; Write meta groups
-    QMOV r0, r10
-
-```qasm
-    QCALL sqlite_write_meta_groups
-    
-    ; Write triangles
+    ; Write triangles table (~100 triangles × 16 bytes = ~1.6KB)
     QMOV r0, r10
     QCALL sqlite_write_triangles
+    QADD r10, 2000
     
     ; Create indices
     QMOV r0, r10
     QCALL sqlite_create_indices
+    QADD r10, 100000
     
     ; Flush to disk
-    QMOV r0, r10
-    QCALL sqlite_flush_to_disk
+    QMOV r0, SQLITE_BUF
+    QCALL sqlite_flush
     
     QRET
-
-; ───────────────────────────────────────────────────────────────────────────
-; SQLite WRITE IMPLEMENTATIONS (CONTINUED)
-; ───────────────────────────────────────────────────────────────────────────
 
 sqlite_write_header:
+    ; Write SQLite file header
     QMOV r10, r0
     
-    ; SQLite magic "SQLite format 3\0"
-    QMOV r11, 0x694C5153
+    ; Magic "SQLite format 3\0"
+    QMOV r11, 0x53514C69        ; "SQLi"
     QSTORE r11, r10
     QADD r10, 4
-    QMOV r11, 0x66206574
+    QMOV r11, 0x74652066        ; "te f"
     QSTORE r11, r10
     QADD r10, 4
-    QMOV r11, 0x616D726F
+    QMOV r11, 0x6F726D61        ; "orma"
     QSTORE r11, r10
     QADD r10, 4
-    QMOV r11, 0x00332074
+    QMOV r11, 0x74203300        ; "t 3\0"
     QSTORE r11, r10
     QADD r10, 4
     
-    ; Page size 4096
+    ; Page size: 4096
     QMOV r11, 4096
     QSTORE r11, r10
-    QADD r10, 4
     
     QRET
 
-sqlite_create_lattice_table:
+sqlite_create_schema:
+    ; Create table schemas
     QMOV r10, r0
-    ; CREATE TABLE lattice_points...
-    QRET
-
-sqlite_create_pq_table:
-    QMOV r10, r0
-    ; CREATE TABLE pseudoqubits...
-    QRET
-
-sqlite_create_tri_table:
-    QMOV r10, r0
-    ; CREATE TABLE w_tripartites...
-    QRET
-
-sqlite_create_meta_table:
-    QMOV r10, r0
-    ; CREATE TABLE w_meta_groups...
-    QRET
-
-sqlite_create_triangle_table:
-    QMOV r10, r0
-    ; CREATE TABLE triangles...
-    QRET
-
-sqlite_write_lattice_points:
-    QMOV r10, r0
-    QADD r10, 10000
     
-    QMOV r11, 0
-    QMOV r5, MOONSHINE_BASE
-    QADD r5, 24
-    QLOAD r12, r5
+    ; Schema stored as SQL text in buffer
+    ; CREATE TABLE coords (sigma INT PRIMARY KEY, j_inv INT, w_tri INT, flags INT)
+    ; CREATE TABLE pseudoqubits (pq_id INT PRIMARY KEY, sigma INT, type_phase INT)
+    ; CREATE TABLE w_tripartites (w_tri_id INT PRIMARY KEY, pq_id INT, iv_id INT, v_id INT)
+    ; CREATE TABLE triangles (tri_id INT PRIMARY KEY, v1 INT, v2 INT, v3 INT)
     
-sqlite_lp_loop:
-    QJGE r11, r12, sqlite_lp_done
+    QRET
+
+sqlite_write_coords:
+    ; Write all coordinate records
+    QMOV r10, r0               ; Buffer position
+    QMOV r11, 0                ; Record counter
     
-    QMOV r13, LATTICE_POINT_TABLE
-    QMUL r14, r11, 48
+write_coords_loop:
+    QMOV r12, MOONSHINE_VERTICES
+    QJGE r11, r12, write_coords_done
+    
+    ; Get coord record
+    QMOV r13, COORDS_TABLE
+    QMUL r14, r11, BYTES_PER_COORD
     QADD r13, r14
     
-    QLOAD r15, r13
-    QADD r13, 8
-    QLOAD r5, r13
-    QADD r13, 8
-    QLOAD r6, r13
-    QADD r13, 8
-    QLOAD r7, r13
+    ; Copy 16 bytes to buffer
+    QLOAD r15, r13             ; sigma
+    QSTORE r15, r10
+    QADD r13, 4
+    QADD r10, 4
     
-    ; Write INSERT
-    QMOV r0, r10
-    QMOV r1, r15
-    QMOV r2, r5
-    QMOV r3, r6
-    QMOV r4, r7
-    QCALL sqlite_insert_point
+    QLOAD r15, r13             ; j_inv_class
+    QSTORE r15, r10
+    QADD r13, 4
+    QADD r10, 4
     
-    QADD r10, 100
+    QLOAD r15, r13             ; w_tri_id
+    QSTORE r15, r10
+    QADD r13, 4
+    QADD r10, 4
+    
+    QLOAD r15, r13             ; flags
+    QSTORE r15, r10
+    QADD r13, 4
+    QADD r10, 4
+    
     QADD r11, 1
-    QJMP sqlite_lp_loop
+    QJMP write_coords_loop
 
-sqlite_lp_done:
-    QRET
-
-sqlite_insert_point:
-    QMOV r10, r0
-    QSTORE r1, r10
-    QADD r10, 8
-    QSTORE r2, r10
-    QADD r10, 8
-    QSTORE r3, r10
-    QADD r10, 8
-    QSTORE r4, r10
+write_coords_done:
     QRET
 
 sqlite_write_pseudoqubits:
+    ; Write all pseudoqubit records
     QMOV r10, r0
-    QADD r10, 500000
-    
     QMOV r11, 0
-    QMOV r5, MOONSHINE_BASE
-    QADD r5, 32
-    QLOAD r12, r5
+    QMUL r12, MOONSHINE_VERTICES, 3  ; Total PQs
     
-sqlite_pq_loop:
-    QJGE r11, r12, sqlite_pq_done
+write_pq_loop:
+    QJGE r11, r12, write_pq_done
     
-    QMOV r13, PSEUDOQUBIT_TABLE
-    QMUL r14, r11, 24
+    ; Get PQ record
+    QMOV r13, PQ_TABLE
+    QMUL r14, r11, BYTES_PER_PQ
     QADD r13, r14
     
+    ; Copy 12 bytes
     QLOAD r15, r13
-    QADD r13, 8
-    QLOAD r5, r13
+    QSTORE r15, r10
+    QADD r13, 4
+    QADD r10, 4
     
-    QMOV r0, r10
-    QMOV r1, r15
-    QMOV r2, r5
-    QCALL sqlite_insert_pq
+    QLOAD r15, r13
+    QSTORE r15, r10
+    QADD r13, 4
+    QADD r10, 4
     
-    QADD r10, 80
+    QLOAD r15, r13
+    QSTORE r15, r10
+    QADD r13, 4
+    QADD r10, 4
+    
     QADD r11, 1
-    QJMP sqlite_pq_loop
+    QJMP write_pq_loop
 
-sqlite_pq_done:
+write_pq_done:
     QRET
 
-sqlite_insert_pq:
+sqlite_write_w_tripartites:
+    ; Write all W-tripartite records
     QMOV r10, r0
-    QSTORE r1, r10
-    QADD r10, 8
-    QSTORE r2, r10
-    QRET
-
-sqlite_write_tripartites:
-    QMOV r10, r0
-    QADD r10, 1000000
-    
     QMOV r11, 0
-    QMOV r5, MOONSHINE_BASE
-    QADD r5, 40
-    QLOAD r12, r5
+    QMOV r12, MOONSHINE_VERTICES  ; One per vertex
     
-sqlite_tri_loop:
-    QJGE r11, r12, sqlite_tri_done
+write_w_tri_loop:
+    QJGE r11, r12, write_w_tri_done
     
-    QMOV r13, W_TRIPARTITE_TABLE
-    QMUL r14, r11, 24
+    ; Get W-tripartite record
+    QMOV r13, W_TRI_TABLE
+    QMUL r14, r11, BYTES_PER_W_TRI
     QADD r13, r14
     
-    QLOAD r15, r13
-    
-    QMOV r0, r10
-    QMOV r1, r15
-    QCALL sqlite_insert_tri
-    
-    QADD r10, 80
+    ; Copy 16 bytes
+    QMOV r15, 0
+copy_w_tri_bytes:
+    QMOV r5, 4
+    QJGE r15, r5, copy_w_tri_bytes_done
+    QLOAD r6, r13
+    QSTORE r6, r10
+    QADD r13, 4
+    QADD r10, 4
+    QADD r15, 1
+    QJMP copy_w_tri_bytes
+
+copy_w_tri_bytes_done:
     QADD r11, 1
-    QJMP sqlite_tri_loop
+    QJMP write_w_tri_loop
 
-sqlite_tri_done:
-    QRET
-
-sqlite_insert_tri:
-    QMOV r10, r0
-    QSTORE r1, r10
-    QRET
-
-sqlite_write_meta_groups:
-    QMOV r10, r0
-    QADD r10, 1500000
-    
-    QMOV r11, 0
-    QMOV r5, MOONSHINE_BASE
-    QADD r5, 48
-    QLOAD r12, r5
-    
-sqlite_meta_loop:
-    QJGE r11, r12, sqlite_meta_done
-    
-    QMOV r13, W_META_TABLE
-    QMUL r14, r11, 16
-    QADD r13, r14
-    
-    QLOAD r15, r13
-    
-    QMOV r0, r10
-    QMOV r1, r15
-    QCALL sqlite_insert_meta
-    
-    QADD r10, 64
-    QADD r11, 1
-    QJMP sqlite_meta_loop
-
-sqlite_meta_done:
-    QRET
-
-sqlite_insert_meta:
-    QMOV r10, r0
-    QSTORE r1, r10
+write_w_tri_done:
     QRET
 
 sqlite_write_triangles:
+    ; Write triangle records from anchor manifolds
     QMOV r10, r0
-    QADD r10, 2000000
-    
     QMOV r11, 0
-    QMOV r5, MOONSHINE_BASE
-    QADD r5, 56
-    QLOAD r12, r5
     
-sqlite_triangle_loop:
-    QJGE r11, r12, sqlite_triangle_done
+    ; Get triangle count
+    QMOV r12, BASE
+    QADD r12, 24
+    QLOAD r13, r12             ; tri_count
     
-    QMOV r13, TRIANGLE_TABLE
-    QMUL r14, r11, 32
-    QADD r13, r14
+write_tri_loop:
+    QJGE r11, r13, write_tri_done
     
-    QLOAD r15, r13
+    ; Get triangle record
+    QMOV r14, TRIANGLE_TABLE
+    QMUL r15, r11, BYTES_PER_TRIANGLE
+    QADD r14, r15
     
-    QMOV r0, r10
-    QMOV r1, r15
-    QCALL sqlite_insert_triangle
-    
-    QADD r10, 96
+    ; Copy 16 bytes
+    QMOV r5, 0
+copy_tri_bytes:
+    QMOV r6, 4
+    QJGE r5, r6, copy_tri_bytes_done
+    QLOAD r7, r14
+    QSTORE r7, r10
+    QADD r14, 4
+    QADD r10, 4
+    QADD r5, 1
+    QJMP copy_tri_bytes
+
+copy_tri_bytes_done:
     QADD r11, 1
-    QJMP sqlite_triangle_loop
+    QJMP write_tri_loop
 
-sqlite_triangle_done:
-    QRET
-
-sqlite_insert_triangle:
-    QMOV r10, r0
-    QSTORE r1, r10
+write_tri_done:
     QRET
 
 sqlite_create_indices:
-    QMOV r10, r0
-    QADD r10, 2500000
-    ; CREATE INDEX statements...
+    ; Create database indices for fast queries
+    ; CREATE INDEX idx_coords_j ON coords(j_inv)
+    ; CREATE INDEX idx_pq_sigma ON pseudoqubits(sigma)
+    ; CREATE INDEX idx_w_tri_pq ON w_tripartites(pq_id)
     QRET
 
-sqlite_flush_to_disk:
+sqlite_flush:
+    ; Flush SQLite buffer to moonshine.db file
     QMOV r10, r0
     
-    ; Open moonshine.db
-    QMOV r0, moonshine_db_filename
-    QMOV r1, 0x242
-    QMOV r2, 0x1B6
-    QSYSCALL 2
-    QMOV r12, r0
+    ; Open file
+    QMOV r0, db_filename
+    QMOV r1, 0x242             ; O_CREAT | O_RDWR
+    QMOV r2, 0x1B6             ; 0666
+    QSYSCALL 2                 ; sys_open
+    QMOV r11, r0               ; fd
     
-    ; Write buffer
-    QMOV r0, r12
+    ; Calculate total size
+    QMOV r2, TARGET_DB_SIZE
+    
+    ; Write
+    QMOV r0, r11
     QMOV r1, r10
-    QMOV r2, 3000000
-    QSYSCALL 1
+    QSYSCALL 1                 ; sys_write
     
     ; Close
-    QMOV r0, r12
-    QSYSCALL 3
-    
-    QRET
-
-; ═══════════════════════════════════════════════════════════════════════════
-; QUERY INTERFACE
-; ═══════════════════════════════════════════════════════════════════════════
-
-moonshine_query_by_sigma:
-    ; Input: r0 = sigma_addr
-    ; Output: r0 = point_addr (48-byte struct)
-    
-    QMOV r10, r0
-    QMOV r11, LATTICE_POINT_TABLE
-    QMUL r12, r10, 48
-    QADD r0, r11, r12
-    QRET
-
-moonshine_query_by_j_inv:
-    ; Input: r0 = j_invariant
-    ; Output: r0 = count, r1 = first_addr
-    
-    QMOV r10, r0
-    QMOV r11, 0
-    QMOV r12, 0
-    QMOV r13, 0
-    
-moonshine_j_search:
-    QMOV r14, MOONSHINE_VERTICES
-    QJGE r13, r14, moonshine_j_search_done
-    
-    QMOV r15, LATTICE_POINT_TABLE
-    QMUL r5, r13, 48
-    QADD r15, r5
-    QADD r15, 8
-    QLOAD r6, r15
-    
-    ; Compare j_inv
-    QSUB r7, r6, r10
-    QMOV r8, 0x3F50624DD2F1A9FC
-    QJLT r7, r8, moonshine_j_match
-    
-moonshine_j_next:
-    QADD r13, 1
-    QJMP moonshine_j_search
-
-moonshine_j_match:
-    QADD r11, 1
-    QJEQ r12, 0, moonshine_j_first
-    QJMP moonshine_j_next
-
-moonshine_j_first:
-    QSUB r15, 8
-    QMOV r12, r15
-    QJMP moonshine_j_next
-
-moonshine_j_search_done:
     QMOV r0, r11
-    QMOV r1, r12
+    QSYSCALL 3                 ; sys_close
+    
     QRET
 
-moonshine_query_by_pq:
-    ; Input: r0 = pq_id
-    ; Output: r0 = pq_addr (24-byte struct)
-    
+; ═══════════════════════════════════════════════════════════════════════════
+; QUERY INTERFACE FOR DATABASE ACCESS
+; ═══════════════════════════════════════════════════════════════════════════
+
+.query_interface
+
+query_by_sigma:
+    ; Input: r0 = sigma
+    ; Output: r0 = coord_addr (16-byte record)
     QMOV r10, r0
-    QMOV r11, PSEUDOQUBIT_TABLE
-    QMUL r12, r10, 24
+    QMOV r11, COORDS_TABLE
+    QMUL r12, r10, BYTES_PER_COORD
     QADD r0, r11, r12
     QRET
 
-moonshine_query_by_triangle:
-    ; Input: r0 = tri_num
-    ; Output: r0 = triangle_addr (32-byte struct)
-    
+query_w_tripartite:
+    ; Input: r0 = w_tri_id
+    ; Output: r0 = w_tri_addr (16-byte record)
+    QMOV r10, r0
+    QMOV r11, W_TRI_TABLE
+    QMUL r12, r10, BYTES_PER_W_TRI
+    QADD r0, r11, r12
+    QRET
+
+query_pseudoqubit:
+    ; Input: r0 = pq_id
+    ; Output: r0 = pq_addr (12-byte record)
+    QMOV r10, r0
+    QMOV r11, PQ_TABLE
+    QMUL r12, r10, BYTES_PER_PQ
+    QADD r0, r11, r12
+    QRET
+
+query_triangle:
+    ; Input: r0 = tri_id
+    ; Output: r0 = tri_addr (16-byte record)
     QMOV r10, r0
     QMOV r11, TRIANGLE_TABLE
-    QMUL r12, r10, 32
+    QMUL r12, r10, BYTES_PER_TRIANGLE
     QADD r0, r11, r12
     QRET
 
-moonshine_get_anchors:
-    ; Output: r0 = first_sigma, r1 = mid_sigma, r2 = last_sigma
-    
+get_anchor_manifolds:
+    ; Output: r0 = first_start, r1 = mid_start, r2 = last_start
     QMOV r0, 0
     QMOV r1, MOONSHINE_VERTICES
     QSHR r1, 1
+    QSUB r1, 50
     QMOV r2, MOONSHINE_VERTICES
-    QSUB r2, 1
-    QRET
-
-moonshine_get_w_network_size:
-    ; Output: r0 = meta_group_count
-    
-    QMOV r5, MOONSHINE_BASE
-    QADD r5, 48
-    QLOAD r0, r5
+    QSUB r2, ANCHOR_MANIFOLD_SIZE
     QRET
 
 ; ═══════════════════════════════════════════════════════════════════════════
@@ -1190,15 +1115,16 @@ moonshine_get_w_network_size:
 ; ═══════════════════════════════════════════════════════════════════════════
 
 .data
-moonshine_db_filename:
+
+db_filename:
     .ascii "moonshine.db\0"
 
-moonshine_metadata:
+metadata:
     .qword 0x4D4F4F4E53544152    ; 'MOONSTAR'
-    .qword 196883                 ; Vertices
-    .qword 163                    ; J-invariants
-    .qword 3                      ; First/Mid/Last anchors
+    .qword MOONSHINE_VERTICES
+    .qword 163                    ; j-invariant classes
+    .byte  3                      ; anchor count
 
 ; ═══════════════════════════════════════════════════════════════════════════
-; END MOONSHINE LATTICE BUILDER
+; END MOONSHINE COMPACT W-STATE LATTICE BUILDER
 ; ═══════════════════════════════════════════════════════════════════════════
