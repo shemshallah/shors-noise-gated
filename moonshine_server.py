@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 MOONSHINE FLASK SERVER
@@ -13,6 +12,7 @@ import threading
 import logging
 import sys
 import io
+import os
 from pathlib import Path
 from datetime import datetime
 from queue import Queue, Empty
@@ -813,11 +813,16 @@ def status():
 # ═════════════════════════════════════════════════════════════════════════
 
 if __name__ == '__main__':
+    # Get port from environment variable (Render sets this to 10000)
+    port = int(os.environ.get('PORT', 10000))
+    
     logger.info("="*80)
     logger.info("🌌 MOONSHINE QUANTUM SERVER STARTING")
     logger.info("="*80)
-    logger.info("Server: http://localhost:5000")
-    logger.info("Terminal: http://localhost:5000/")
+    logger.info(f"Server: http://0.0.0.0:{port}")
+    logger.info(f"Terminal: http://0.0.0.0:{port}/")
     logger.info("="*80)
     
-    app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
+    # Bind to 0.0.0.0 and use PORT from environment
+    # Disable debug mode in production
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
