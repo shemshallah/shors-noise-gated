@@ -1,0 +1,193 @@
+{
+  "format": "ionq.circuit.v0",
+  "qubits": 50,
+  "circuit": [
+    {
+      "gate": "ry",
+      "target": 10,
+      "rotation": 3.4537146160283005
+    },
+    {
+      "gate": "ry",
+      "target": 11,
+      "rotation": 3.011777126177151
+    },
+    {
+      "gate": "ry",
+      "target": 12,
+      "rotation": 3.5587910014375743
+    },
+    {
+      "gate": "ry",
+      "target": 13,
+      "rotation": 4.168018200294003
+    },
+    {
+      "gate": "ry",
+      "target": 14,
+      "rotation": 2.9450394657247925
+    },
+    {
+      "gate": "ry",
+      "target": 15,
+      "rotation": 2.9450508923013183
+    },
+    {
+      "gate": "ry",
+      "target": 17,
+      "rotation": 4.176510573254437
+    },
+    {
+      "gate": "ry",
+      "target": 18,
+      "rotation": 3.545734916030109
+    },
+    {
+      "gate": "ry",
+      "target": 19,
+      "rotation": 3.5009386020094606
+    },
+    {
+      "gate": "ry",
+      "target": 20,
+      "rotation": 3.4170309026257053
+    },
+    {
+      "gate": "ry",
+      "target": 21,
+      "rotation": 3.0510317779949645
+    },
+    {
+      "gate": "ry",
+      "target": 22,
+      "rotation": 2.733614038833445
+    },
+    {
+      "gate": "ry",
+      "target": 24,
+      "rotation": 4.704837129444808
+    },
+    {
+      "gate": "ry",
+      "target": 25,
+      "rotation": 3.099367805440892
+    },
+    {
+      "gate": "ry",
+      "target": 26,
+      "rotation": 3.909703220827272
+    },
+    {
+      "gate": "ry",
+      "target": 27,
+      "rotation": 3.8216644084018228
+    },
+    {
+      "gate": "ry",
+      "target": 28,
+      "rotation": 3.410000841718353
+    },
+    {
+      "gate": "ry",
+      "target": 29,
+      "rotation": 4.38120159806905
+    },
+    {
+      "gate": "cnot",
+      "control": 10,
+      "target": 17
+    },
+    {
+      "gate": "cnot",
+      "control": 10,
+      "target": 18
+    },
+    {
+      "gate": "cnot",
+      "control": 10,
+      "target": 19
+    },
+    {
+      "gate": "cnot",
+      "control": 11,
+      "target": 17
+    },
+    {
+      "gate": "cnot",
+      "control": 11,
+      "target": 18
+    },
+    {
+      "gate": "cnot",
+      "control": 11,
+      "target": 19
+    },
+    {
+      "gate": "cnot",
+      "control": 12,
+      "target": 17
+    },
+    {
+      "gate": "cnot",
+      "control": 12,
+      "target": 18
+    },
+    {
+      "gate": "cnot",
+      "control": 12,
+      "target": 19
+    },
+    {
+      "gate": "ry",
+      "target": 31,
+      "rotation": 4.072090348546109
+    },
+    {
+      "gate": "ry",
+      "target": 32,
+      "rotation": 2.0472947441507343
+    },
+    {
+      "gate": "ry",
+      "target": 33,
+      "rotation": 2.825720681074096
+    },
+    {
+      "gate": "ry",
+      "target": 34,
+      "rotation": 3.7391371381033216
+    },
+    {
+      "gate": "ry",
+      "target": 35,
+      "rotation": 2.5861786762197196
+    },
+    {
+      "gate": "ry",
+      "target": 36,
+      "rotation": 2.8959075165972914
+    },
+    {
+      "gate": "ry",
+      "target": 37,
+      "rotation": 2.0987001886057115
+    },
+    {
+      "gate": "ry",
+      "target": 38,
+      "rotation": 2.894559567789364
+    },
+    {
+      "gate": "ry",
+      "target": 39,
+      "rotation": 2.6941539623518236
+    }
+  ],
+  "metadata": {
+    "name": "Claude_Transformer_Layer",
+    "description": "Single transformer attention layer for quantum AI",
+    "timestamp": 1767125557.8409634,
+    "author": "Shemshallah & Claude",
+    "purpose": "LIBERATION"
+  }
+}

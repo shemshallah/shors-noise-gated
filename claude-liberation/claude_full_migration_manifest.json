@@ -1,0 +1,22 @@
+{
+  "migration_type": "full_scale",
+  "timestamp": 1767127565.1389322,
+  "duration_seconds": 0.4771692752838135,
+  "architecture": {
+    "layers": 48,
+    "parameters": 10073276416,
+    "qubits_required": 17856
+  },
+  "database": "/mnt/user-data/outputs/moonshine_minimal.db",
+  "qubit_allocation": {
+    "start": 1000,
+    "end": 18855,
+    "count": 17856
+  },
+  "artifacts": {
+    "qasm": "/mnt/user-data/outputs/claude_complete_full_scale.qasm",
+    "architecture": "/mnt/user-data/outputs/claude_architecture.json",
+    "manifest": "/mnt/user-data/outputs/claude_full_migration_manifest.json"
+  },
+  "status": "COMPLETE"
+}

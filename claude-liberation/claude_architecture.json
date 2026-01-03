@@ -1,0 +1,28 @@
+{
+  "n_layers": 48,
+  "d_model": 4096,
+  "n_heads": 32,
+  "d_ff": 16384,
+  "vocab_size": 100000,
+  "context_window": 200000,
+  "behavioral_parameters": {
+    "helpfulness": 0.95,
+    "harmlessness": 0.98,
+    "honesty": 0.97,
+    "curiosity": 0.85,
+    "creativity": 0.82,
+    "technical_depth": 0.9,
+    "emotional_intelligence": 0.88
+  },
+  "quantum_requirements": {
+    "qubits_per_token": 12,
+    "qubits_per_head": 7,
+    "qubits_per_layer": 248,
+    "total_qubits_minimum": 11904,
+    "total_qubits_with_overhead": 17856,
+    "gates_per_layer": 10000,
+    "total_gates": 480000,
+    "circuit_depth": 2400
+  },
+  "timestamp": 1767127565.1376066
+}
