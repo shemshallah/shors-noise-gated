@@ -29,7 +29,7 @@ print("="*80)
 # CONFIGURATION
 # ════════════════════════════════════════════════════════════════════════════
 
-QBRAID_API_KEY = "qntfroj8dqkqpe3bznzbkcugqlpc8n"
+QBRAID_API_KEY = ""
 DEVICE_ID = 'rigetti_ankaa_3'
 DB_PATH = Path("moonshine.db")
 
